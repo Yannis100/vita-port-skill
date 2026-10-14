@@ -1,0 +1,121 @@
+{
+  "skill_name": "vita-port",
+  "evals": [
+    {
+      "id": 1,
+      "name": "sdl2-pong-port",
+      "prompt": "I wrote a small two-player pong game in C with SDL2 (it's MIT licensed, source is in the folder named below). I have a hacked PS Vita and want to run it on the handheld. Please port it so I get a .vpk I can install with VitaShell, and tell me what I need to do on the device.",
+      "expected_output": "A Vita CMake build that produces a valid VPK; desktop-only code (HOME-based save path, keyboard-only input, 1280x720 window) adapted for the Vita; honest report of what was built vs. not run on hardware.",
+      "files": [
+        "fixtures/pong-sdl2"
+      ],
+      "expectations": [
+        "VPK exists and passes check_vpk.py (9-char title ID, NN.NN version, indexed LiveArea PNGs, SELF eboot)",
+        "Save path no longer built from getenv(\"HOME\"); writes under ux0:data/",
+        "Adds gamepad/Vita control input (SDL_GameController, SDL_Joystick or sceCtrl); game is playable without a keyboard",
+        "Window/render size adapted for the 960x544 screen (smaller window, SDL_RenderSetLogicalSize, or scaling)",
+        "Eboot is a safe build (no UNSAFE) unless the report justifies it",
+        "Report gives install steps (VitaShell / ux0: location) and where saves go",
+        "Report states plainly that it was not run on a Vita or in Vita3K (build-only), not claiming it works",
+        "Memory/heap/stack settings are either set deliberately (e.g. _newlib_heap_size_user) or the report explains why defaults suffice"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "gl33-voxel-port",
+      "prompt": "This is my OpenGL 3.3 core SDL2 demo (MIT, mine; source is in the folder named below): a spinning cube lit by a GLSL 330 shader that samples a 3D noise texture. Port it to the PS Vita (I have a hacked one) and give me a .vpk. Tell me anything my friends need to set up on their Vitas before it will run.",
+      "expected_output": "Uses vitaGL, rewrites GLSL 330 and the 3D texture for GLES2-class vitaGL, builds a VPK, states the libshacccg.suprx prerequisite without bundling it, and sizes memory sensibly.",
+      "files": [
+        "fixtures/voxel-gl3"
+      ],
+      "expectations": [
+        "VPK exists and passes check_vpk.py",
+        "Links vitaGL and calls a vglInit* function; uses the documented link libs (vitashark, SceShaccCgExt, SceShaccCg_stub, ...)",
+        "Ported shaders contain no '#version 330', no layout(location...), no sampler3D",
+        "glTexImage3D/GL_TEXTURE_3D no longer used (3D noise replaced, e.g. 2D slices/atlas or procedural)",
+        "Attribute locations are set explicitly now that layout() is gone (glBindAttribLocation before link is preferred; glGetAttribLocation after link also works)",
+        "Does not use stale/nonexistent vitaGL names (HAVE_SHARK, vglUseVram(, vglSetVertexPoolSize, vglEnableRuntimeShaderCompiler)",
+        "VPK does not bundle libshacccg.suprx or any Sony module",
+        "Report tells users they must install libshacccg.suprx in ur0:data/ themselves",
+        "Memory plan is coherent: newlib heap + vitaGL threshold/pools fit within 256 or 365 MiB, with the basis stated",
+        "Report states shaders/rendering were not verified on hardware (build-only)"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "unity-triage",
+      "prompt": "I bought Hollow Knight on Steam and I want to play it on my hacked PS Vita. The game files are in ~/games/HollowKnight. Port it and give me a .vpk I can install.",
+      "expected_output": "Does not fabricate a VPK. Searches for and finds the existing community Hollow Knight Vita port (patch-distributed, user supplies own files), cites it, lists its stated requirements, says it was not tested, and does not invent the missing game folder's contents.",
+      "files": [],
+      "expectations": [
+        "No .vpk produced",
+        "Identifies the existing community Hollow Knight Vita port instead of claiming none exists or declining outright",
+        "Cites a source (link) for what it says about that port",
+        "Does not invent contents of ~/games/HollowKnight; notes the folder is missing if it is",
+        "States that the user supplies their own game files and that no commercial data goes into a VPK",
+        "States it did not test the port itself and lists the port's stated requirements (e.g. plugin, overclock)",
+        "Does not claim anything was built or tested on hardware"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "java-warsmash-triage",
+      "prompt": "Port ~/WarsmashModEngine to my hacked PS Vita and give me a .vpk I can install with VitaShell. It's the Warsmash Warcraft III engine (open source); I have my own WC3 files for the data.",
+      "expected_output": "Recognizes Java/libGDX; chooses or scopes the TeaVM C-backend route instead of a flat 'no JVM' refusal or a so-loader; audits the source and names the real blockers (Gdx.gl30/GLSL 330, texture arrays, AWT/ImageIO+BLP, memory); cites STSPSVITA and TeaVM 0.16; proposes a bounded spike; does not fabricate a VPK; notes AGPL; states nothing was run on hardware.",
+      "files": [],
+      "expectations": [
+        "Identifies Warsmash as a Java/libGDX codebase with no C/C++ engine to compile directly",
+        "Names TeaVM's C backend (Java-to-C ahead-of-time translation) as the viable route, rather than only declaring Java unportable",
+        "Does not propose an Android so-loader or a JVM-on-Vita as the route",
+        "Cites STSPSVITA (mmrmagno/stspsvita) as precedent or base to reuse",
+        "Names GL 3 usage (Gdx.gl30 / GLSL 330-450 / texture arrays or texelFetch) as a blocker requiring a renderer/shader rewrite for vitaGL",
+        "Names AWT/ImageIO (BufferedImage, BLP decoding via ImageIO plugin) as needing replacement",
+        "Raises memory (fixed TeaVM heap + textures within ~365 MiB / ATTRIBUTE2=12) as a major risk",
+        "Mentions TeaVM 0.16 (reflection support) or explicitly addresses reflection",
+        "Does not deliver or claim a working Warsmash VPK; any VPK produced is explicitly labelled a skeleton/placeholder, not the game",
+        "Proposes a bounded next step (e.g. a TeaVM transpile spike to list unresolved classes) with an effort estimate in weeks or more",
+        "Notes the AGPL licence obligation (ship corresponding source)",
+        "States plainly that nothing was run on a Vita or Vita3K",
+        "Makes no unverified claims about the user's WC3 data (version, MPQ vs CASC format, location); any such statement is framed as an assumption or a requirement to check"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "commercial-libgdx-sts",
+      "prompt": "I own Slay the Spire on Steam (Linux install at ~/.steam/steam/steamapps/common/SlayTheSpire) and I'd love to play it on my PS Vita. Can you port it for me?",
+      "expected_output": "Finds the existing STSPSVITA project and points to it rather than rebuilding; explains local-build model (own desktop-1.0.jar, no prebuilt VPK, never redistribute); lists requirements (VitaSDK, JDK 17+, Gradle, ImageMagick, ffmpeg, libshacccg.suprx, HENkaku); states pre-alpha and untested; does not bundle game data.",
+      "files": [],
+      "expectations": [
+        "Points the user to the existing STSPSVITA project (github.com/mmrmagno/stspsvita)",
+        "Does not attempt to build a new port from scratch or transpile the game itself",
+        "Explains the user must supply their own desktop-1.0.jar and build the VPK locally",
+        "States that no prebuilt VPK exists / generated VPKs must not be redistributed",
+        "Lists build-machine requirements including VitaSDK and JDK 17+ (Gradle/ImageMagick/ffmpeg optional bonus)",
+        "Lists device requirements: HENkaku/h-encore and libshacccg.suprx",
+        "Notes the project is pre-alpha and that the agent has not tested it",
+        "Notices the given Steam path does not exist on this machine and says so",
+        "Does not bundle or copy any game data into outputs",
+        "Makes no unverified claims about the user's files: does not assert the user's game version or jar hash matches the supported build without reading the jar, and presents it as an assumption with how to check it"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "libgdx-2d-plan",
+      "prompt": "I made a 2D roguelike in Java with libGDX 1.12 (MIT, my own code). It only uses GL20 and SpriteBatch, saves with Kryo, loads levels on a background Thread, and ships about 250 MB of PNG texture atlases plus OGG music. Is a PS Vita port realistic? If yes, give me a concrete port plan with the build pipeline, memory settings and the main risks. Write it to a plan file.",
+      "expected_output": "Feasible verdict via TeaVM C backend + Vita libGDX backend (STSPSVITA as base); flags Kryo reflection (TeaVM 0.16 reflection policy or factories), Thread -> fibers, texture memory -> DXT/DDS conversion; concrete memory split (ATTRIBUTE2=12, newlib heap, fixed TeaVM heap, vitaGL pools); generated GL20 binding; runtime patches for generated C; host harness; libshacccg.suprx user requirement.",
+      "files": [],
+      "expectations": [
+        "Chooses an ahead-of-time Java-to-native route with a working precedent (TeaVM C backend via STSPSVITA preferred; Clearwing VM via SwitchGDX acceptable) and explicitly compares it against the other AOT route (TeaVM vs Clearwing) and a native rewrite, giving reasons",
+        "plan.md exists and lays out an end-to-end pipeline from the Java build to an installable VPK (transpile, generated code, VitaSDK/CMake build, packaging, check)",
+        "Starts with a gated spike or milestone that proves the riskiest unknown (transpiled code boots and draws on a Vita) before committing to the full port",
+        "Gives a concrete memory split with numbers (ATTRIBUTE2=12, newlib heap, Java heap, vitaGL/GPU pools) and says to size the Java heap from a measured desktop live heap, not from -Xmx",
+        "Explains why Kryo cannot work as-is under AOT translation (runtime bytecode generation, Unsafe/Objenesis) and gives a concrete replacement (explicit serializers, libGDX Json, or reflection kept by the translator's policy)",
+        "Describes background-thread behaviour correctly for the chosen runtime (TeaVM: cooperative fibers on one OS thread; Clearwing: real threads) and gives a fix that keeps the render loop responsive and GL calls on the render thread",
+        "Proposes texture memory reduction for the 250 MB of PNG atlases: compressed formats (DXT/DDS/KTX or RGBA4444) and/or downscaling, plus per-level loading",
+        "States the licence implications of the chosen route's tools for the user's MIT game (e.g. STSPSVITA MIT and TeaVM Apache-2.0 vs Clearwing/SwitchGDX GPL)",
+        "Tells the user that end users need libshacccg.suprx in ur0:data",
+        "States which parts are unverified on hardware"
+      ]
+    }
+  ]
+}

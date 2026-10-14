@@ -1,0 +1,86 @@
+# Template CMake for a PS Vita port. Copy to <project>/CMakeLists.txt (or merge the `if(VITA)` parts
+# into the existing file so the desktop build keeps working). Edit the three VITA_* values.
+cmake_minimum_required(VERSION 3.16)
+
+# Must come before project(): finds the toolchain when run as plain `cmake -S . -B build`.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(DEFINED ENV{VITASDK})
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+  else()
+    message(FATAL_ERROR "Please define VITASDK to point to your SDK path!")
+  endif()
+endif()
+
+project(mygame C CXX)                             # <- project name = unstripped ELF name in build/
+include("${VITASDK}/share/vita.cmake" REQUIRED)   # after project(): defines vita_create_self/vpk
+
+set(VITA_APP_NAME "My Game")      # bubble name under the icon
+set(VITA_TITLEID  "MYGM00001")    # EXACTLY 9 chars: 4 letters + 5 digits, unique on the device
+set(VITA_VERSION  "01.00")        # must match NN.NN
+
+# -std=gnu11: GCC 15 defaults to a newer C standard that rejects old C. -g keeps symbols for crash dumps.
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -std=gnu11 -g -Wall -fsigned-char")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17 -g -Wall -fsigned-char")
+set(CMAKE_C_FLAGS_RELEASE   "-O3 -ffast-math -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -ffast-math -DNDEBUG")
+
+# Float-Point Contract (for physics/replay accuracy)
+# -ffp-contract=off: prevents fused multiply-add, keeps IEEE single-precision
+# -ftrivial-auto-var-init=zero: zero-initializes automatic variables (GCC 13+)
+# Only needed when game relies on specific float behavior or zeroed memory
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffp-contract=off -ftrivial-auto-var-init=zero")
+
+# Larger main memory budget (365 MiB instead of 256). Takes effect at install time. Released SDKs
+# (2026.08) write ATTRIBUTE2=0 unless told otherwise, so this line is what turns it on. Small games
+# (pong-sized) do not need it: delete the line to keep the default 256 MiB. Test with and without
+# UNSAFE (below): whether the flag needs an unsafe eboot is unverified.
+set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
+
+add_executable(${PROJECT_NAME}
+  src/main.c
+  vita/vita_runtime.c          # heap/stack/clock settings, from the skill's assets/vita_runtime.c
+)
+target_compile_definitions(${PROJECT_NAME} PRIVATE __VITA_PORT__=1)
+
+# Pick ONE graphics route. Keep dependents before dependencies.
+option(VITA_USE_VITAGL "Link vitaGL (OpenGL via GXM)" OFF)
+
+find_package(SDL2 REQUIRED)                      # `vdpm install sdl2` (or sdl2_vitagl for GL)
+set(VITA_STUBS
+  SceDisplay_stub SceCtrl_stub SceTouch_stub SceMotion_stub
+  SceAudio_stub SceGxm_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub
+)
+
+if(VITA_USE_VITAGL)
+  target_link_libraries(${PROJECT_NAME}
+    vitaGL stdc++ m mathneon vitashark SceShaccCgExt taihen_stub SceShaccCg_stub
+    SceKernelDmacMgr_stub SceAppMgr_stub)
+endif()
+
+target_link_libraries(${PROJECT_NAME}
+  SDL2::SDL2
+  ${VITA_STUBS}
+  -pthread                                       # NOT bare -lpthread (needs --whole-archive via the driver)
+)
+
+# Safe eboot by default. Add UNSAFE only for so-loaders / kubridge / ports that proved they need it,
+# and tell users to enable "unsafe homebrew".
+option(VITA_UNSAFE "Build an unsafe eboot" OFF)
+if(VITA_UNSAFE)
+  vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
+else()
+  vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME})
+endif()
+
+vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
+  VERSION ${VITA_VERSION}
+  NAME ${VITA_APP_NAME}
+  FILE sce_sys/icon0.png sce_sys/icon0.png
+  FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+  FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+  FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  # Do NOT add commercial game data or libshacccg.suprx here. Users supply their own.
+)
+
+# Build:  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+# Check:  python3 ~/.claude/skills/vita-port/scripts/check_vpk.py build/${PROJECT_NAME}.vpk
