@@ -293,5 +293,9 @@ revived build was not run. What the commits had to change, most common first:
    CMake project you `add_subdirectory` (fahrenheit-vita runs it at configure time).
 
 **Verified active projects (2026-10):** `Rinnegatamante/vitaQuake` (142 stars, active 2026-10-03) and
-`Rocroverss/vitasoguide` (updated 2026-10-08) are both alive. No DOSBox-vita, GZDoom-vita, OpenMW-vita or
-ECWolf-vita repos exist as of 2026-10 — use these for reference, not as starting points.
+`Rocroverss/vitasoguide` (updated 2026-10-08) are both alive. Status re-checked 2026-10-15:
+**`TheLostPantheon/openmw` exists** (87★, OpenMW fork with full vitaGL port, pushed 2026-10-05),
+and **DOSBox on Vita exists as Libretro cores** in `noword/Emu4VitaPlus` (262★, dosbox-pure /
+dosbox-svn, both with upstream `vita` build targets). There is still **no repo named
+`dosbox-vita`, GZDoom-vita, or ECWolf-vita** as of 2026-10 — use vitaQuake/vitasoguide as
+reference, not these.

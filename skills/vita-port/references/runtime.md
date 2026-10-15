@@ -56,6 +56,8 @@ any `sceKernelAllocMemBlock` arenas. Budget them as a sum.
 | GTA SA loader | 192 MiB | 2 MiB sceLibc, 16 MB threshold |
 | bc2_vita | 192 MiB | 8 MiB threshold, `ATTRIBUTE2=12` |
 | Halo CE | 48 MiB heap + 112 MiB arena memblock | 16 MiB game-thread stack |
+| DaedalusX64-vitaGL | 256 MiB (`_newlib_heap_size_user`) | clocks 444/222/222/166, 128 MB max ROM in RAM |
+| VitaKotor2 | 160 MiB + 64 MiB bigalloc pool (max 8×8 MB segs) | `ATTRIBUTE2=12`, 80 MiB vitaGL threshold, 4 GB `ux0:` data |
 
 ## 3. The settings every port should export
 
@@ -98,6 +100,27 @@ const int sceUserMainThreadPriority = 0x60;               // see Threads
 Free memory can be read with `sceKernelGetFreeMemorySize`. Halo CE allocates one large
 `USER_RW` arena up front and sub-allocates from it, which avoids heap fragmentation.
 
+**Partition the newlib heap vs vitaGL explicitly** (from VitaKotor2 `loader/config.h`, 2026-10). The
+order matters: set `_newlib_heap_size_user` first, then `MEMORY_VITAGL_THRESHOLD_MB` (the amount
+vitaGL must leave unclaimed; vitaGL grabs "everything else" at `vglInitExtended`, which runs before
+the game). If you shrink newlib, raise the threshold in step or vitaGL claims the difference and the
+game finds nothing. VitaKotor2 used 160 MiB newlib + 80 MiB vitaGL threshold.
+
+**Big-allocation isolation** (VitaKotor2 `loader/bigalloc.c`): mixing multi-MB blocks with a game's
+thousands of small long-lived objects shreds the newlib heap — the largest servable block halved
+from 32 MB to 512 KB over ~150 s while 46 MB stayed free, ending in an uncaught `bad_alloc` on a 1 MB
+request. Fix: serve every request ≥ 256 KB from separate `sceKernelAllocMemBlock` segments (8 MB
+each, up to 8, committed lazily). The budget is taken *from* newlib, not added — there is nothing
+spare once vitaGL claims everything except `MEMORY_VITAGL_THRESHOLD_MB`.
+
+**Android .so memory map** (VitaKotor2 `loader/config.h`): the loader maps each loaded Android
+library at a fixed address so they don't overlap — `libkotor2.so` at `0x98000000`,
+`libc++_shared.so` at `0x96000000`, `libLzmaLib.so` at `0x94000000`, `libminiz.so` at `0x92000000`,
+`libObbVfs.so` at `0x90000000`. Keep the 192 MB heap out of this range (its base can collide with
+`0x8Cxxxxxx`). For N64-class workloads (DaedalusX64), the ROM itself is held wholly in RAM (128 MB
+max) with `_newlib_heap_size_user = 256 MB` and an exec-time `sceKernelAllocMemBlock` for the dynarec
+code cache.
+
 GXM defaults (gxm.h): parameter buffer 16 MiB, VDM ring 128 KiB, vertex ring 2 MiB, fragment ring
 512 KiB. Alignment: colour surface 4, texture 16, depth/stencil 16, palette 64. Max 16 vertex
 attributes, 16 texture units. `SCE_GXM_INITIALIZE_FLAG_PB_LPDDR` puts the parameter buffer in main
@@ -122,6 +145,25 @@ emits x86/x64 must use its interpreter or gain an ARMv7 backend. Two routes, rea
   with your code-cache size on hardware.
 - `opt.size = sizeof(opt)` must be set on `SceKernelAllocMemBlockKernelOpt`; round the size up to
   1 MiB as PCSX_AwO does (`(size + 0xfffff) & ~0xfffff`).
+- **DaedalusX64's dynarec** (2026-08-21 series): a working dynarec must invalidate precisely.
+  It replaced full cache clears with per-range invalidation (`e9cf3e5`), invalidates only the
+  effective range in its Mario/Rugrats HLE (`cd4ffa3`), pre-reserves a 10k-entry fragment vector
+  (`172d2b4`), and kept a "fall back hot SMC blocks to interpreter" option (`da3956e`) plus a
+  per-game hack (Paper Mario) to always interpret one region (`1c8a31e`). RDRAM texture hashing
+  was rewritten with NEON `uint32x4_t` to hash 16 bytes per lane (`722c46b`); N64 texel bytes are
+  byte-swapped during the same pass so conversion and hashing share one read. Dynarec code lives
+  directly under `Source/SysVita/DynaRec/` and emits ARM (not C) — no dependency on kubridge.
+
+### Vita dynarec without kubridge (DaedalusX64)
+
+DaedalusX64's ARM dynarec is pure C/ARM — no kubridge, no kernel patches:
+- JIT code buffer: `sceKernelAllocMemBlockForVM("code", 8*1024*1024 * 2)` (two 8 MB VM blocks), made executable
+  with `sceKernelSyncVMDomain`; `kuKernelMemProtect(READ|WRITE|EXEC)` only as fallback.
+- Hot trace: interpreter loops until a block crosses `gHotTraceThreshold = 10`, then dynarecs it.
+- Precise invalidation: dynarec blocks invalidated only when required and only over the affected range; fragment
+  cache is pre-reserved for 10k entries; SMC-heavy regions can fall back to the interpreter per-block.
+- 128 MB N64 RDRAM is mapped into CPU RAM; RDRAM is dirty-marked so only changed regions re-upload to the GPU,
+  and hashing is NEON-accelerated (`uint32x4_t`, 16 B/lane).
 - `kuKernelMemProtect` needs an address of at least `0x40000000`, aligned to 4 KiB (the length is
   rounded up to 4 KiB), and a memblock whose paging type kubridge supports; otherwise it returns
   `SCE_KERNEL_ERROR_INVALID_ARGUMENT` or `SCE_KERNEL_ERROR_SYSMEM_MEMBLOCK_ERROR`. Check the return
@@ -225,6 +267,43 @@ Key considerations:
 - Pin audio/render threads to dedicated cores for consistent frame pacing.
 - Thread creation uses `sceKernelCreateThread` with `cpuAffinityMask` set to the result of `vitaAffinity()`.
 
+### 5b. Whole-process pinning layouts (VitaKotor2)
+
+KOTOR II on Vita pins every thread to a fixed 3-core layout (`loader/threads.h`, `loader/threads.c`):
+
+```c
+#define CPU_GAME   SCE_KERNEL_CPU_MASK_USER_0   /* SDL_main, nothing else */
+#define CPU_AUX_A  SCE_KERNEL_CPU_MASK_USER_1   /* audio mixer, half the workers */
+#define CPU_AUX_B  SCE_KERNEL_CPU_MASK_USER_2   /* GL worker, parked main, GC, rest */
+```
+
+- `thread_census_add_ex()` records each created thread with its pin mask and old mask; a census
+  lists which core is busy and with what. Global `THREAD_PINNING` toggles the whole layout on/off
+  (used for A/B testing on hardware); `thread_layout_apply(pinned)` re-applies the recorded layout
+  to every thread dynamically, so one session compares pinned vs unpinned.
+- `thread_next_worker_mask()` alternates game workers between cores 1 and 2.
+- The audio mixer runs at `AUDIO_MIXER_PRIORITY = 0x100000F0` (one step above the default), pinned
+  to core 1 (it sleeps in `sceAudioOutOutput` most of the time, so rank it above the game's threads).
+- The GL worker (`gl_worker.c`) runs pinned to core 2 at priority `GL_WORKER_PRIORITY=158` with a
+  2 MiB stack; the game thread records GL commands, the worker replays them (vitaGL on its own
+  core). Config: `GL_WORKER_MODE=2` (0 off, 1 inline record+replay, 2 worker thread), it lets the
+  game run `GL_WORKER_FRAMES_AHEAD=1` frame ahead.
+
+Key insight: CPU-bound engine ports on the Vita benefit from **recording GL on the game thread and
+replaying on a dedicated core**. KOTOR II measured ~4.5 ms of GL command-capture per frame vs ~8 ms
+when the game thread called vitaGL directly (`docs/specs/PERFORMANCE.md` section 5.7). The GL worker
+uses a lock-free ring buffer of wrapped calls with semaphores for sync calls that return data
+(pointer args refer to producer memory during a sync call). Producer keeps a state copy so the
+worker replays with correct buffer binds/attribute pointers.
+
+### GL worker thread (VitaKotor2, gl_worker.c)
+
+For heavy so-loader or engine ports, run all GL calls on a dedicated thread through a lock-free ring buffer:
+- wrap all `gl*` with `-Wl,--wrap`, the game thread records calls, a GL thread on core 2 executes them.
+- 64-byte cache-line alignment for the shared state is mandatory: a shared cache line rewritten by the worker
+  after every command made every recorded call miss (real hardware finding from KOTOR II).
+- Generate the wrappers with a small tool (`tools/gen_glw.py` in VitaKotor2) rather than hand-writing them.
+
 ## 6. Clocks and frame pacing
 
 The common port setting, used by Halo CE, Quake II, GTA SA, fheroes2 and others:
@@ -266,6 +345,12 @@ core's fps. Its software presenter also waits for vblank, so 50 Hz content still
 display (it ships a separate frame-interpolation option). The thresholds are PCSX_AwO's, read in
 source and not measured here.
 
+**Solid 30 FPS instead of uneven 34–37** (VitaKotor2 `loader/frame_pace.c`, v0.4.2): a game whose
+engine can render faster than 30 but unevenly is capped at an even 30 by letting each frame cover
+exactly two vblanks. Vsync stays on — turning it off measured no faster. Data files can override
+it per install (`ux0:data/kotor2/fps_cap.txt` containing `0`). This is a much cheaper cap than a
+busy-waited target.
+
 ## 7. Files and paths, savedata
 
 - `app0:` is the read-only installed bundle and the default cwd. Write only to
@@ -275,7 +360,29 @@ source and not measured here.
   on-screen message with the expected path, then exit cleanly (Halo CE does this).
 - Official savedata slots need `sceAppUtilInit` and the `sceAppUtilSaveData*` calls; plain files in
   `ux0:data` are the simpler route for homebrew.
-- Mind free space: caching decompressed data can need gigabytes. Document it.
+- Mind free space: caching decompressed data can need gigabytes. Document it. VitaKotor2 needs about
+  **4 GB free** for the Android game data (1.8 GB OBB + voice packs).
+
+### 7b. SD-card I/O optimisations (VitaKotor2 patterns)
+
+The Vita memory card is slow (~10 MB/s, seek-heavy). KOTOR II removed whole classes of stutter with
+caching, all behind simple file/hook patterns:
+
+- **Archive read cache** (`loader/obb_cache.c`, `ramfile.c`): the engine re-read the same small
+  scripts from the card every time. Keep repeated reads in RAM (mean frame 75 → 60 ms).
+- **Talk table in RAM** (`loader/ramfile.c`): `dialog.tlk` lookups cost ~38 ms each on the card (the
+  game did flush+seek pairs per string). Read the file once; serve every later `fopen` from an
+  `fmemopen` stream so seeks/flush/read never reach the card. Removed the 0.2–0.6 s combat stutter.
+- **Persistent archive index** (`loader/obb_index.c`): a 1.8 GB OBB's ZIP headers are scattered
+  (mean gap 107 KB between headers), defeating read-ahead. The loader records the bytes each boot
+  reads and replays them from a small saved file from the second boot on (title ~34 s → ~24 s).
+- **Loose-file miss cache** (`loader/fs_patch.c`): the engine stats/opens read-only folders for
+  assets that are often not there; answer misses from a per-folder listing made once.
+- **Voice/loc text kept open** (`loader/fdtrack.c`): a scene holding hundreds of file handles can
+  exhaust the limit if each keeps the file open (Telos: the log then can't reopen). Read the line
+  into memory and `close` immediately (about 2 MB for 65 held lines in that scene).
+- `sceIoPread` instead of `fseek`+`fread` (one syscall, no newlib buffer invalidation) for archive
+  reads.
 - `sceAppUtilSystemParamGetInt` returns the enter-button assignment (Cross vs Circle by region).
 - **Launch parameters** (LiveArea custom bubbles, `psgm:play` URIs): call
   `sceAppMgrGetAppParam(buf)` (1024-byte buffer) at start when `argv` has no path. A bubble launch
@@ -305,11 +412,50 @@ source and not measured here.
   and use env `VITA_DISABLE_TOUCH_FRONT` / `_BACK` as needed.
 - Add an in-game settings overlay (Halo CE: hold Select+Start) for sensitivity, deadzone, frame
   limit and resolution; ports are much easier to tune on hardware with one.
+- **4 controllers from one handheld** (DaedalusX64 `Source/SysVita/Input/InputManagerVita.cpp`):
+  the N64 has 4 pads, the Vita one. It reads "virtual" controllers 2..4 from the same physical pad
+  (port `i ? (i+1) : 0`), zeroing the others; the player switches emulated controllers. Analog is
+  normalised from 0..255 to -128..127, then non-linearly smoothed
+  (`stick.x = 0.5*stick.x * (1+stick.x*stick.x)`) before mapping to the N64's -80..80 range.
+- **Rear-pad L2/R2 quadrants** (DaedalusX64, `gUseRearpad`): split the rear panel into 4 quadrants
+  (left = L2/L3, right = R2/R3 by Y halves) so a console with no L2/R2 can trigger them. Dedicated,
+  skippable on PS TV.
 
 ## 9. Audio, network, system dialogs
 
+**Native audio output pattern reference:** joel16/ElevenMPV and GrapheneCt/ElevenMPV-A
+(`sceAudioOutOutput` ring buffer on a decode thread, `sceAudioOutSetVolume` with
+`SCE_AUDIO_VOLUME_FLAG_L_CH|R_CH`, static-linked codec libs libopus/libvorbis/libogg/
+libxmp-lite/dr_flac/mpg123) — the proven non-Android audio plumbing on Vita.
+
+- **switchfin (Jellyfin client) media stack:** native mpv-on-GXM (`MPV_RENDER_API_TYPE_GXM`, 4x MSAA,
+  `rgba8` FBO, `display_buffer_count=1`, `video-latency-hacks yes`, `vd-lavc-threads 4`), FFmpeg SCE hw
+  decoders (`aac_vita`/`mp3_vita`/`h264_vita`), curl with a ~20 MiB physically-contiguous pool
+  (`sceClibMspace` + `curl_global_init_mem`) and mandatory `CURLOPT_NOSIGNAL`, `_newlib_heap_size_user`
+  = 220 MiB, config at `ux0:/data/switchfin`. Reference: dragonflylee/switchfin.
+- **Material-Eleven (libvita2d music player):** screen-off music via `sceAppMgrAcquireBgmPort`,
+  system-volume param 9, 2 MiB vita2d vertex pool, MSAA chosen from free CDRAM before init, deferred
+  audio-thread reaps with a generation counter; mono-track buffer must be `length × channel_count`.
+  Reference: Perroabuelo/Material-Eleven.
+
 - Audio: SDL_mixer, openal-soft (Vita-patched 1.19.1), or `sceAudioOut` with your own thread.
   Stream music; decode to 48 kHz S16 stereo. Mixing thread on its own core.
+- **FMOD → sceAudiodec/sceAudioOut on the Vita** (VitaKotor2 `loader/audio_patch.c`): the Android
+  game uses FMOD; the loader replaces its FMOD channel/stream implementation, decodes MP3 with the
+  Vita's hardware `sceAudiodec` (falling back to minimp3 on the audio thread when the hardware
+  decoder is busy), and mixes into a single 48 kHz stereo `sceAudioOut` port. KOTOR II's own
+  `audio_thread` runs at `0x10000100` (or `AUDIO_MIXER_PRIORITY` when pinned), 32–64 KB stack.
+  - Double-buffer pattern (v0.5.5+, `AUDIO_DOUBLE_BUFFER`): hand `sceAudioOutOutput` two buffers
+    taken in turn so mixing the next grain never races the playing buffer (SDL's Vita backend does
+    the same).
+  - Stream long assets (14–24 MB PCM) instead of decoding them whole; skip the FMOD "channel scan"
+    (called ~50×/frame) when no sound has ended `g_end_dirty` — about 1 ms/frame.
+  - OpenSL ES contract (for Bink movie audio) is implemented narrowly in `opensl_patch.c` — 4
+    vtable interfaces + a bounded PCM queue into the same mixer, not a full OpenSL.
+- **Bink movies play through the game's embedded decoder** (VitaKotor2 `bink_patch.c`, KOTOR II
+  embeds the Bink decoder + renderer + OpenSL adapter in `libkotor2.so`). The loader feeds PCM from
+  Bink into its audio mixer and renders frames via vitaGL. Test switches `KOTOR_BINK_SHADER_TEST` /
+  `_LEGAL_VIDEO_TEST` / `_OPENSL_TEST` gate the experimental routes.
 - Network: BSD sockets work, with `_vita_net_init()` lazily loading SceNet on the first `socket()`
   (about 139 KB). Libraries needing `fcntl(O_NONBLOCK)`, `socketpair` or `pipe2` need the curl-style
   tweaks. HTTPS via SceHttp+SceSsl (`samples/net_https`) or curl+mbedtls.

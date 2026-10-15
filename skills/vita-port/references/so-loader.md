@@ -406,6 +406,77 @@ Set via CMake options or environment:
 | NBA Jam | (various) | Multi-touch, 3D rendering |
 | 9mm (HD) | [iwannagooutside/9mm-vita](https://github.com/iwannagooutside/9mm-vita) | Clean so-loader wrapper; pitfall: do NOT combine fd_fix with rePatch |
 | Prince of Persia Classic, Zenonia 2/3, Asphalt 5, and other MetalSyntax ports | [MetalSyntax](https://github.com/MetalSyntax) | so-loader wrapper family |
+| **KOTOR II** | [pyjabox/VitaKotor2](https://github.com/pyjabox/VitaKotor2) | **Hardest-known so-loader**: Android ARM libs + OBB, FMOD→sceAudiodec, Bink, OpenSL, JNI stubs, GL worker, whole-process core pinning, bigalloc heap isolation, 25 FPS |
+
+### KOTOR II (VitaKotor2) — deep-dive patterns
+
+An experimental native loader for the **Android release** of Star Wars KotOR II (`libkotor2.so`,
+v2.0.4 only — patched at fixed offsets, so exact-SHA libraries required). Playable ~25 FPS on
+hardware. Reads nothing but the user's own Android copy (APK libs + 1.8 GB OBB in
+`ux0:data/kotor2/`).
+
+**Port shape** (`loader/main.c`, `so_util.c`, `dynlib.c`):
+- Adapts 5 Android `.so`s: `libkotor2.so` (main), `libObbVfs.so` (upward-call companion loading the
+  OBB), `libminiz.so` + `libLzmaLib.so` (compression), `libc++_shared.so` (Android C++ runtime).
+- **No JNI_OnLoad and no RegisterNatives.** The native surface is statically-exported Android
+  callbacks + SDL_main, reached through the game's own `_JNIEnv::` wrappers. `jni_patch.c`
+  fabricates a fake `JNIEnv`/`JavaVM` whose function-table slots are typed shims; everything else
+  falls through to a traced safe-default so an unexpected call logs instead of dereferencing null.
+- Imports wired to VitaSDK `libc`/`libm`/`libstdc++`/`pthread`; a `__sF[0x400]` dummy provides the
+  bionic `&__sF[2]` `stderr` address and a safe `fprintf` routes miniz's error logs to the loader
+  log (a real `fprintf` on a fake `FILE*` would fault). `KOTOR2_BUILD` gates the KOTOR-II-specific
+  hooks from the KOTOR-I (VitaKotor) ancestors.
+
+**ABI warning** (`CMakeLists.txt`): the current SDK/vitaGL/vitashark/mathneon are built **hardfp**,
+so the loader itself links hardfp. The Android `armeabi-v7a` ABI is **softfp** (float args in integer
+registers), so a runtime `.so` port ultimately needs a **softfp toolchain** (rebuild vitaGL & deps
+with `-mfloat-abi=softfp`) to match float return values across the `.so` boundary (e.g.
+`CallStaticFloatMethodV`). The skeleton still links hardfp; the authors explicitly defer the softfp
+build to the runtime phase. (`SOFTFP_ABI=1` in vitaGL is the flag to use once that toolchain exists.)
+
+**Memory** (`config.h`, `heap.c`, `bigalloc.c`):
+- `ATTRIBUTE2=12` (extended 365 MiB MAIN) mandatory. Without it a large newlib heap fails at CRT
+  init (`_sbrk_r` before `main()`).
+- `_newlib_heap_size_user = 160 MiB`; `MEMORY_VITAGL_THRESHOLD_MB = 80` (what vitaGL must leave
+  unclaimed — vitaGL claims "everything else" at init, so its threshold must be raised in step when
+  newlib shrinks).
+- **BigAlloc isolation** (`bigalloc.c`): allocations ≥ 256 KB jump to private `sceKernelAllocMemBlock`
+  segments (8 MB each, up to 8, lazily committed), taken from the newlib budget. Prevents the 1 MB
+  `bad_alloc`-death from fragmentation (largest block was halving every ~150 s). Budget is
+  **from** newlib, not added.
+- `.so` map at fixed addresses: `libkotor2` 0x98000000, `libc++_shared` 0x96000000, `libLzmaLib`
+  0x94000000, `libminiz` 0x92000000, `libObbVfs` 0x90000000.
+
+**Performance layers** (each A/B-tested on hardware, `docs/specs/PERFORMANCE.md`):
+- **GL worker** (`gl_worker.c`): every `gl*` call is `-Wl,--wrap`-ed into a lock-free ring-buffer
+  command stream, replayed on core 2 by a worker thread (vitaGL itself never touches the game
+  thread). Sync calls (query results, `glGetIntegerv`-style) run inline. Generated wraps:
+  `tools/gen_glw.py` + `cmake/glw_wraps.cmake`.
+- **GL state filter** (`gl_state_filter.c`): repeated `glEnable`/binds/texture-unit calls dropped
+  before Aspyr's GL→GXM shim (~5 ms/frame).
+- **Vertex-program pool** (`gxm_patcher.c`): wraps `sceGxmShaderPatcherCreateVertexProgram` (also
+  via `--wrap`) so variants unused for `GXMP_IDLE_FRAMES=30` frames are freed (4 MB pool), fixing
+  long-session geometry spikes. `GXMP_SLOTS=8192` open-addressed index.
+- **Native DXT** (`dxt_native.c`): DXT1/3/5 textures go to GPU compressed (8.9 → 3.3 s texture
+  building). **GPU mipmaps** (`mip_gpu.c`): NPOT images rescaled with NEON, 16-bit conversion with
+  NEON (1920x1200: 837 → 354 ms).
+- **Contextless tunables** via files in `ux0:data/kotor2/`: `fps_cap.txt`, `ai_mode.txt`,
+  `room_distance.txt`, `[vsync-ab]`, `[snd-gap]` A/B — a whole A/B harness readable from card.
+- Audio: FMOD replaced (`audio_patch.c`, `audio_mp3.c`, `audio_ring.c`); Bink movies via embedded
+  decoder (`bink_patch.c`); narrow OpenSL ES contract (`opensl_patch.c`); hardware MP3 with
+  `sceAudiodec`; minimp3 fallback.
+
+**Post-build check** (`tools/check_vitagl_build.sh`, run by CMake POST_BUILD): runs `nm` on the
+eboot and fails if `invoke_splashscreen` is present (forgot `NO_SPLASHSCREEN=1`) or the custom
+shader cache is linked without an explicit `KOTOR2_ALLOW_UNSAFE_SHADER_CACHE=1` allow flag. A cheap
+way to keep build-time flag regressions visible.
+
+**Packaging quirks**: `-Wl,-z,max-page-size=0x10000` — `vita-elf-create` appends ~4.5 KB of SCE
+data into the slack between RX and RW segments; at the default 4 KB alignment that slack is one
+page and the build fails with "Cannot allocate N bytes for SCE data at end of segment 0"; at 64 KB
+the slack is 14× what SCE data needs. The VPK bundles edited GLSL shader chunks (`app0:shaders/`)
+and `.txi` font metrics (`app0:fonts/`) served by the loader's `SDL_RWFromFile` hook, so the fixed
+shaders (GXM TEXCOORD budget) and fonts always travel with the loader.
 
 ### FD_FIX vs rePatch Pitfall (9mm-vita)
 

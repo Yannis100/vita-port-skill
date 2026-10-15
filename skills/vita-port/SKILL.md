@@ -157,6 +157,10 @@ not run plugin-dependent builds, so a Vita3K pass is not proof. On hardware use 
 (FTP 1337, commands 1338) and `vita-parse-core` on the unstripped ELF. Symptoms and fixes are in
 `references/debugging.md`.
 
+**Vita3K caveat (community report):** some ports do not run under Vita3K at all (e.g. the gunbro port), even
+when there are no Vita3K/PSV gaps for the game. A Vita3K pass is a convenience, never proof. For games that
+won't start under Vita3K, plan hardware-only validation (vitacompanion + vita-parse-core) from the start.
+
 ### 9. Hand-off
 
 Deliver the VPK build instructions plus a README with an end-user section (exact `ux0:data/<name>/`

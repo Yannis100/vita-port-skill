@@ -46,6 +46,12 @@ Follow the workflow in `SKILL.md`. Typical shape (fheroes2, Quake II, Xash3D):
 - The data directory is `ux0:data/<name>/`; the VPK contains only the executable and LiveArea files.
 - For GL engines, shaders are precompiled GXP (Quake II, Hexen II, Xash3D) or compiled at runtime
   via vitaGL, with a shader cache.
+- **Emulators / JIT hosts** (DaedalusX64): the port is a whole-system emulator with its own ARM
+  dynarec. Compile with `-march=armv7-a -mtune=cortex-a9 -mfpu=neon -ffast-math` and keep hot
+  emulator code free of calls (the whole source tree in `Source/DynaRec/CodeGeneratorARM.cpp` emits
+  ARM directly). Run the emulator's RSP/RDP on the CPU; offload the presentation to vitaGL. A
+  128 MB-mapped N64 game fits in a 256 MiB newlib heap with the VM's RDRAM + texture cache in
+  CPU RAM (see `references/runtime.md` section 4 for sizes).
 
 ## 3. Engine reimplementations
 
@@ -59,9 +65,19 @@ user copies their own HL2 data; audio partial. Big lesson from the author: the A
 HL2 would not compile for Vita (3 months dead end); the win came from porting the **GPL Source
 Engine source** instead. Also new: `WolffsRoom/godot4-vita` is an experimental Godot 4.8-dev7 to
 Vita (see section on runners; skill previously said "Godot 4 not found" — now contradicted).
-Users supply the original data files. Do not claim a port exists for ECWolf, OpenMW, GZDoom or
-DOSBox without checking: none was found (re-checked 2026-10; still true). OpenTTD-vita is an old
-fork (480x272, no sound or network).
+Users supply the original data files. Verified port status (re-checked 2026-10-15): **OpenMW IS
+now on Vita** — `TheLostPantheon/openmw` (author "KingTorro", 87★, fork of OpenMW/openmw created
+2026-02-14, pushed 2026-10-05) is a full vitaGL port with `vita`/`vita-port`/`vita-rebuild`
+branches, a Vita layer (apps/openmw/vita, components/vita, cmake/VitaToolchain.cmake,
+Dockerfile.vita, scripts/vita-deps). GameBrew page: gamebrew.org/wiki/OpenMW_Vita (v2.2, updated
+2026-08-13); VitaDB id 1390. Runs Morrowind/Tribunal/Bloodmoon at claimed 20-30 FPS (\*not
+on-device verified\*). Users copy their own Morrowind data. **DOSBox is also on Vita**, but as
+Libretro cores (`dosbox-pure`, `dosbox-svn`) inside the `noword/Emu4VitaPlus` frontend (262★,
+v0.81 shipped 2026-10-05; both upstream Makefiles have an official `vita` target, arm-vita-eabi;
+DOSPure/DOSSVN also build as standalone apps) — there is still no repo literally named
+`dosbox-vita`, and `futureg1rl/psp-windows` (DOSBox 0.71) only runs on Vita through the built-in
+PSP emulator (`pspemu/PSP/GAME`), not natively. ECWolf and GZDoom: still no Vita port found.
+OpenTTD-vita is an old fork (480x272, no sound or network).
 
 ## 4. Decompilation / custom GXM backend: Halo CE example
 
@@ -117,14 +133,24 @@ Full deep-dive with technique details and a verified project table: `references/
 | **Xbox (original) recomp stubborn** | — | [Xita-Project/xita](https://github.com/Xita-Project/xita) | x86→C lift of XBEs with a Vita runtime; fed into Halo CE. Closed, code remains for study. |
 
 Repeated here because they contradict earlier "not found" notes: the skill previously said no
-DOSBox, GZDoom, OpenMW or ECWolf ports were found — **that is still true** (checked 2026-10;
-no `dosbox-vita` repo exists). Do not claim those. Half-Life 2 on Vita, however, **is now real**:
-see section 3 note and [`Barabbo/source-engine`](https://github.com/Barabbo/source-engine).
+DOSBox, GZDoom, OpenMW or ECWolf ports were found. As of 2026-10-15 that is **no longer fully
+true**: **OpenMW now exists on Vita** (`TheLostPantheon/openmw`, see section 3 note), and
+**DOSBox runs on Vita** as Libretro cores bundled in `noword/Emu4VitaPlus` (frontend, not a
+standalone `dosbox-vita` repo — no such repo exists). Still NOT found as of 2026-10-15: GZDoom
+and ECWolf Vita ports. Half-Life 2 on Vita is also real: see section 3 note and
+[`Barabbo/source-engine`](https://github.com/Barabbo/source-engine).
 
 Why this route matters for triage: when a playable binary exists and the source is closed, static
 recompilation is now the community's go-to before writing a from-scratch reimplementation, and it
 is the only route that has shipped real commercial-game ports (Conker, BoI) without any source.
 Memory budget and libshacccg remain the same constraints as other GXM routes.
+
+### Reverse-engineering resources
+
+Community-recommended tooling for binary analysis of closed-source targets (feeds the static-recomp route):
+- Ghidra (NSA, open source): decompilation, function recovery, struct reconstruction for any lifted target.
+- rea.tools: online RE suite (assemblers, disassemblers, encoders/decoders, hash tools) useful during asset and
+  binary cooking.
 
 ## 5. Android `.so` loaders
 
@@ -242,7 +268,8 @@ What this means in practice:
 | Grarak/DSVita (GPL-3.0) | NDS emulator in Rust with a JIT: kubridge blocks at fixed addresses, `MemCommit` mirrors of one block, fastmem through an abort handler (`src/mmap/vita.rs`) |
 | ScoobyDouche/VitaKotor (`loader/crash.c`) | crash logger on kubridge exception handlers that resolves PC/LR to module + offset |
 | Rinnegatamante/PCSX_AwO (fork of notaz/pcsx_rearmed, 2026-10) | kubridge RWX JIT memory, sleep-then-spin frame pacing, PS TV multi-controller and rear-touch L2/R2, LiveArea `psgm:play` launch params, psp2cgc GXP embedded in the eboot, vitaGL on a render thread, SDL3 + imgui frontend |
-| Rinnegatamante/DaedalusX64-vitaGL | current vitaGL flag recipe; Cg post-processing shaders rewritten for USSE speed (2026-10-12) |
+| Rinnegatamante/DaedalusX64-vitaGL | **N64 emulator on vitaGL**: full ARM dynarec (Cortex-A9), NEON RDRAM hashing, `vglIndexPointerMapped`/`vglDrawObjects` (n64rot-era API), FF-renderer with framebuffer readbacks, Cg post-processing rewritten for USSE speed (2026-10-12), vgl-init with `scePowerSetArmClockFrequency(444)` |
+| pyjabox/VitaKotor2 | **hardest-known Android so-loader**: KOTOR II native ARM libs + OBB, FMOD→`sceAudiodec`/`sceAudioOut`, Bink via embedded decoder, OpenSL shim, fake JNIEnv, GL worker on core 2, whole-process core pinning, bigalloc heap isolation, `-Wl,-z,max-page-size=0x10000`, `check_vitagl_build.sh` post-link check. v0.5.6, ~25 FPS on hardware |
 | Rinnegatamante/flycast-vita | zero-copy vertex/index lists with `vglMalloc` + `vglBufferData`, 32-bit indices, Cg shaders via `GL_CG_*_SHADER_EXT` |
 | Rinnegatamante/ldhewm3-rearmed | Doom 3 on vitaGL: NEON math, dormant entities behind portals, `r_maxLights`, frameskip; LTO tried and removed (crashes) |
 | Rinnegatamante/fahrenheit-vita, vitaWolfen, vitaVoyager (2026-09-30 commits) | what breaks when an old port meets the current SDK (`toolchain.md` section 8) |
@@ -278,6 +305,18 @@ harvesting is not practical) and Reddit r/vitahacks + r/vitapiracy release threa
   Developers)"; plus a changelog and known issues.
 - Title ID: 9 characters `XXXXYYYYY`, unique. Examples: `QUAKE0002`, `HXEN00001`, `GTASA0000`,
   `FHOMM0002`, `XASH00001`; samples use `VSDK000nn`. Ship `.vpk` on GitHub Releases; list on VitaDB.
+
+### Port release-readiness checklist (community feedback)
+
+A port is "done" only when a reviewer can verify, on hardware:
+- Main story/game path complete start-to-finish (not just the first levels); timed/end-game content reached.
+- Saves: write, reload, and continue across sessions; no per-session-only progress.
+- Performance holds in the worst authored scene (not just menus): state the FPS target and the measured floor.
+- No crash or soft-lock on: pause/resume, returning to menu, video playback, and the longest load.
+- Audio: all missing/placeholder tracks accounted for; disconnect events handled.
+- Workarounds are listed and marked (quality.txt, shader-cache toggles, forced settings), not hidden.
+- A documented test device/firmware (3.60/3.65/3.68) and the exact plugin set (kubridge, fd_fix, etc.).
+If any item is knowingly unverified, ship a "known gaps" section rather than calling the release final.
 
 ## 5b. Android .so Loader Ports (deep dive)
 

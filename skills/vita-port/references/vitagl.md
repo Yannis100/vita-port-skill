@@ -124,6 +124,18 @@ CIRCULAR_POOL_SPEEDHACK=1 ENABLE_LEGACY_PIPELINE=1 NO_SPLASHSCREEN=1`; yoyoloade
 SOFTFP_ABI=1 NO_DEBUG=1 SHARED_RENDERTARGETS=1 NO_SPLASHSCREEN=1 ENABLE_LEGACY_PIPELINE=1` (adding
 `ENABLE_LEGACY_PIPELINE=1` fixed its black screen on the 2026-05 vitaGL).
 
+DaedalusX64 (`Rinnegatamante/DaedalusX64-vitaGL`, README 2026-10) also patches vitaGL itself after the
+build for N64 fog: `sed -i "s/float fog_dist = coords.z \/ coords.w;/float fog_dist = coords.z;/"
+source/shaders/ffp_f.h` then `sed -i "s/#define FFP_SHADER_CACHE_MAGIC /#define
+FFP_SHADER_CACHE_MAGIC 99/" source/shared.h` (bumps the FFP shader-cache magic so the patched fog
+shader is recompiled). Build flags: `READBACKS_SPEEDHACK=1 HAVE_GLSL_TEXTURE_SIZE=1 NO_DEBUG=1
+HAVE_UNFLIPPED_FBOS=1 NO_TEX_COMBINER=1 HAVE_CUSTOM_HEAP=1 SINGLE_THREADED_GC=1 HAVE_FFP_SHADER_SUPPORT=1
+DEPTH_STENCIL_HACK=1 CIRCULAR_POOL_SPEEDHACK=1 ENABLE_LEGACY_PIPELINE=1 NO_SPLASHSCREEN=1`.
+To compile both game and loader flags are checked after linking with `tools/check_vitagl_build.sh`
+(VitaKotor2): it runs `nm` on the eboot and fails the build if a bad symbol is present (e.g.
+`invoke_splashscreen` if `NO_SPLASHSCREEN` was forgotten) or an unsafe shader-cache symbol is linked
+without an explicit allow flag.
+
 Several ports build their own vitaGL with these flags instead of the vdpm package, sometimes from a
 fork (PCSX_AwO uses a `vitaGL-pcsx-rearmed` checkout). Pin the vitaGL commit in the port's build
 instructions, because HEAD changes weekly.
@@ -289,6 +301,29 @@ Real values: bc2_vita newlib 192 MiB + `vglInitWithCustomThreshold(0,960,544,8<<
   filter became two `dot`s); use `short` for integer pixel math (`(short)floor(x) & 1`).
 - Debug: build vitaGL with `HAVE_SHARK_LOG=1` and `LOG_ERRORS=1`, read `glGetShaderInfoLog`,
   dump translated source with `DEBUG_GLSL_TRANSLATOR=1`.
+
+### DaedalusX64 patterns (N64 emulator, Rinnegatamante)
+
+- **One GL backend, two targets**: the emulator's HLE graphics keeps a single Fast3D OpenGL backend that runs on
+  desktop (GL/glew) and Vita (`#ifdef __vita__` → `<vitaGL.h>`). Same code, switch the header — the reference
+  pattern for a custom renderer that must build for both SDL desktop and Vita.
+- **Accurate renderer**: since 2026-08 the tree ships a third renderer ("Accurate") that imports Fast3D from the
+  N64 decomp scene under `Source/SysVita/HLEGraphics/Accurate/Fast3D/`, giving correctness-focused RDP emulation
+  alongside Legacy and Modern renderers.
+- **Post-process as Cg, not GLSL**: filters (CRT, FXAA, LCD3x, hue/sat, sharp-bilinear, Daltonic) ship as
+  `.cg` fragment files (`Data/DaedalusX64/Shaders/*/frag.cg`) compiled on-device through vitaGL's Cg path
+  (`GL_CG_FRAGMENT_SHADER_EXT` / `GL_CG_VERTEX_SHADER_EXT`). Cg is a cheaper route than GLSL translation for
+  fixed pipelines and especially for the Vita's USSE (see shader-speeding rules below).
+- **USSE-shaped shaders (commit `7fd9123`, 2026-10)**: for Vita shader tuning, avoid `if`/ternary when
+  `step`/`lerp`/`saturate`/`max` and `abs(frac())` express the same result; replace `pow(x, 0.25)` with
+  `sqrt(sqrt())`; divide by a reciprocal constant instead of a uniform; use `short` for per-pixel integer math.
+  Version references: 8 Cg frag shaders were optimised this way in one pass.
+- **Fog fix via shader-cache magic**: N64 fog is fixed by patching vitaGL's `ffp_f.h` (`fog_dist = coords.z`
+  instead of `coords.z / coords.w`) **and bumping `FFP_SHADER_CACHE_MAGIC`** so the patched FFP shader
+  recompiles instead of loading a stale cached binary.
+- **Current vitaGL flag recipe** (from the repo README/CI, 2026-10): with current vitaGL the flags are
+  `CIRCULAR_POOL_SPEEDHACK=1` plus the two `sed` patches above; older recipes used
+  `SHADER_COMPILER_SPEEDHACK=1 CIRCULAR_VERTEX_POOL=2` — do not reuse the old names.
 
 ## 7. SDL2, GL4ES, EGL and loaders
 

@@ -1,7 +1,21 @@
-# Vita Port Agent Skill
+# Vita Port Agent Skills
 
-Agent skill for porting games and game engines to the Sony PS Vita (PSVita / PS TV) as VPK homebrew
-using VitaSDK, vdpm, vitaGL, SDL2 and GXM.
+Agent skills for porting software to the Sony PS Vita (PSVita / PS TV) as VPK homebrew.
+
+## Skills
+
+This repository publishes two skills:
+
+- **vita-port** — porting games to the PS Vita (VitaSDK, vitaGL, Android .so loader, static
+  recomp, API emulation).
+- **vita-app-port** — porting Android applications and non-game tools to the PS Vita (.so loader
+  or native VitaSDK builds).
+
+Install both:
+
+```bash
+npx skills add yannis100/vita-port-skill
+```
 
 ## What it covers
 
@@ -43,13 +57,16 @@ Use the vita-port skill. <your request>
 
 ## Contents
 
-- `skills/vita-port/SKILL.md` — main workflow (triage → toolchain → skeleton → dependencies →
+- `skills/vita-port/SKILL.md` — game porting workflow (triage → toolchain → skeleton → dependencies →
   platform layer → graphics → package → test → hand-off)
 - `skills/vita-port/references/` — 9 reference docs: toolchain, runtime, vitagl, port-types,
   api-emulation, so-loader, static-recomp, java-teavm, debugging
 - `skills/vita-port/scripts/` — audit_source.py, check_env.sh, check_vpk.py, make_placeholder_assets.py
 - `skills/vita-port/assets/` — CMakeLists.vita.txt, template.xml, vita_runtime.c
 - `skills/vita-port/evals/` — evaluation scenarios
+- `skills/vita-app-port/SKILL.md` — app porting workflow for Android apps and non-game tools
+  (triage → toolchain → skeleton → platform layer → graphics → package → test → hand-off)
+- `skills/vita-app-port/references/` — app-runtime.md (IME, dialogs, permissions, paths, input)
 
 ## License
 
