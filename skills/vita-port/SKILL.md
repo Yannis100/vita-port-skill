@@ -40,7 +40,21 @@ search (`topic:psvita-homebrew`, `topic:vitasdk`) and plain `"<game> vita"` / `"
 plus r/vitahacks and r/vitapiracy release threads (Reddit's JSON API is bot-blocked; use pullpush.io /
 arctic-shift archives or web search). VitaDB (`vitadb.rinnegatamante.it`) is a JS SPA, not
 curl-harvestable — check it in a browser. A port or a matching engine may already exist, and forking beats
-starting over. Then read the source with the audit script:
+starting over.
+
+**Seek a portable codebase before porting.** The original project may be written in a language with no Vita
+runtime (Dart/Flutter, Kotlin, Java, C#, Electron), or be closed source with only a decomp/recomp route.
+Before committing to a from-scratch port or a VM/AOT workaround, search for an existing **C/C++ or
+platform-agnostic reimplementation** of the same project: translations of the save/format logic, forks with a
+core separated from UI, GPL engine rewrites, or decomp/recomp trees. Model: **PKSM (FlagBrew)** — a Pokémon
+save manager whose save logic lives in a portable `core/` (PKSM-Core) plus a shared `common/` layer, with only
+the 3DS front-end (`3ds/`) platform-specific and host-run tests that build with no console SDK. It is 3DS-only
+in-tree, yet its structure is the template for "portable core, replaceable UI": a Vita front-end can sit on the
+same core, and a Java/Kotlin-only app with a C++ format core is ported by finding that core, not by abandoning
+the request. Fork beats starting over — the same rule as for existing Vita ports, applied one level down: fork
+the portable core, write the UIs you need.
+
+Then read the source with the audit script:
 
 ```bash
 python3 ~/.claude/skills/vita-port/scripts/audit_source.py <source-dir>

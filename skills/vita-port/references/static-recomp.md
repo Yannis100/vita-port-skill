@@ -24,6 +24,7 @@ machine code, not a target platform's documentable API.
 | SMG Petari | Super Mario Galaxy (Wii) | Decompilation runtime | WIP, 10-20 fps |
 | VitaKart64 / sm64ds-remastered-vita | Mario Kart 64 / SM64DS | Decompilation runtimes | Playable |
 | MH3rd-HD | Monster Hunter 3rd HD | Recompiled | 60 fps |
+| Monster Hunter Tri (Wii) | PowerPC (`sys/main.dol`, relocatables) | Static recomp: C#/.NET8 translator (`recomp.yml`), GX replaced by native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld toolchain | Full shipping engine port (VPK + launcher), active 2026-10 |
 
 ## Technique Details
 
@@ -54,6 +55,41 @@ machine code, not a target platform's documentable API.
 - ISO9660 → P5CK readers replace PS2 disc access
 - A VIF/VU1 **interpreter** captures GIF packets (geometry uploads)
 - GS-space preview validates the pipeline before full rendering
+
+### Wii → Vita static recompilation (mh3-wii)
+
+`Grarak/mh3-wii` is the reference for porting a Wii game by static recompilation:
+- **Translate**: PowerPC from `main.dol` + relocatable modules → C++ ahead of time (C#/.NET 8
+  translator driven by `recomp.yml`: function map, entry points, `no_return_functions`, hook sites,
+  `hardware_access.inc` / `alias_access.inc` slow-path marking). Flat guest memory spans MEM1/MEM2 as
+  one reserved backing block.
+- **Replace GX, do not emulate it**: every GX caller is ported to native C producers that record
+  typed frame packets; a separate render thread draws them. Any unported GX path panics loudly
+  (the 201 GX natives route to `PanicLegacyGx`) so gaps surface instead of failing silently.
+- **Shaders offline**: 4,211 vertex + 658 fragment stages precompiled with Sony `psp2cgc.exe`
+  (under Wine/Docker) at build time, packed (~2.1 MB), embedded — the release build has no runtime
+  shader compiler.
+- **Toolchain**: clang-21 + lld for the translated C++ (VitaSDK provides only sysroot/libs/packaging
+  via `cmake/toolchains/vita-clang.cmake` adapted from Azahar); `--pic-veneer` linker flag needed
+  for the large clang/lld code; ThinLTO + PGO for release.
+- **Sizing**: ~1,650 hot functions ported to native C; kernels kubridge 0.3.1+ and CapUnlocker
+  (4th core) required; CDRAM ~ 3×3.5 MiB frame slots + 16 MiB converted models + ~47 MiB textures.
+- **Order that works** (from the repo docs): recompile + boot on desktop → replace GX family by
+  family with native producers → convert assets at load → Vita platform + precompiled shaders →
+  profile, port hot functions, move work off the game thread → cut GPU time → ThinLTO+PGO release.
+
+### PS2 → handheld static recomp discipline (universal-ps2-recompiler)
+
+`SandstoneDev/universal-ps2-recompiler` (a PS2→PSP agent kit around the PS2RC static recompiler)
+documents transferable discipline for any console→Vita recomp:
+- Host-first pipeline: get the main loop running on a PC host build before touching the handheld.
+- Replace the renderer at its lowest stable software boundary (the device-driver layer), keeping
+  the engine's render logic translated.
+- R5900 (PS2) FPU is not IEEE: clamp operands, round toward zero, no fused multiply-add.
+- Whole-program width/liveness analysis to a fixpoint; recover function discovery and jump tables
+  backwards from `jr`.
+- A/B against a reference emulator run for divergence, with honest device numbers — the kit's own
+  published floor is ~30 fps indoors / 17-21 fps outdoors on a PSP-3000 at 333 MHz.
 
 ## When to Use
 

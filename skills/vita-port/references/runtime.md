@@ -483,3 +483,7 @@ libxmp-lite/dr_flac/mpg123) — the proven non-Android audio plumbing on Vita.
   `-flto` and removed it on 2026-09-13 because it "causes crashes". If you try it, A/B test on
   hardware. Wrap
   `memcpy`/`memmove`/`memset` to `sceClibMem*` via `-Wl,--wrap,...` when profiling shows it matters.
+
+**clang-built Vita workloads are proven beyond VitaSDK GCC**: mh3-wii compiles a large translated C++
+base with clang-21 + lld (VitaSDK only for sysroot/packaging), required `--pic-veneer` for the large
+code, and ships ThinLTO + PGO release builds (see static-recomp.md).

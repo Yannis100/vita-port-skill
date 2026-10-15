@@ -29,6 +29,15 @@ Do the steps in order. Each ends with something checkable.
 
 ### 1. Triage: is it feasible, and which route?
 
+**Search for a portable core before triaging by language.** The route can flip based on which codebase you
+port. Before deciding "Java/Kotlin-only → not feasible" or "no native `.so` → stop", check whether a
+platform-agnostic C/C++ reimplementation of the app's logic exists (forks, format-translation projects, apps
+with a core submodule separated from their Android/JS UI). Model: **PKSM (FlagBrew)** — a save manager whose
+`core/` (PKSM-Core) is pure portable C++ with no Android/3DS guards, whose shared `common/` layer adds only
+UI- and net-agnostic logic, and whose platform code is a thin front-end (`3ds/`); its own test suite
+(`tests/`) builds on a plain host g++ with no console SDK, proving the core is portable. If such a core
+exists, port the core and write a Vita UI for it — that is a native-VitaSDK route, not a decline.
+
 Check the APK's ABI and entry points first. Use the scripts from the `vita-port` skill:
 
 ```bash

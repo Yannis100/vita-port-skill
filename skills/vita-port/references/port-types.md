@@ -7,6 +7,10 @@ Use this to choose the route in step 1 and to find real code to copy. Decision o
 3. Source exists in C/C++ and needs GL 2.x or lower: SDL2 or vitaGL.
 4. An Android armeabi-v7a build exists: so-loader (advanced).
 5. Otherwise reimplement the engine, or decline.
+6. The original is in a non-portable language or closed source, but a C/C++ or platform-agnostic
+   reimplementation of the same project exists elsewhere (`core`/`common` separated from UI, format
+   translations, decomp trees) — fork that and write a Vita front-end; PKSM's `core/`+`common/`+`3ds/`
+   split (with on-host `tests/`) is the model.
 
 ## Contents
 1. Taxonomy
@@ -63,7 +67,14 @@ Valve's 2020-leaked Source Engine, built on nillerusr/source-engine) shipped `v0
 (2026-10-12) — multicore stable, dynamic lights and soft shadow maps, playable start to finish,
 user copies their own HL2 data; audio partial. Big lesson from the author: the Android build of
 HL2 would not compile for Vita (3 months dead end); the win came from porting the **GPL Source
-Engine source** instead. Also new: `WolffsRoom/godot4-vita` is an experimental Godot 4.8-dev7 to
+Engine source** instead.
+
+The same "find the portable core, don't port the platform build" lesson applies to utilities, not just
+engines: PKSM keeps its save logic in a platform-agnostic `core/` + shared `common/` with a thin `3ds/`
+front-end and host-run tests — the structure to copy when the user's target is an app whose only shipped
+build is Android/Java but a portable C++ core exists.
+
+Also new: `WolffsRoom/godot4-vita` is an experimental Godot 4.8-dev7 to
 Vita (see section on runners; skill previously said "Godot 4 not found" — now contradicted).
 Users supply the original data files. Verified port status (re-checked 2026-10-15): **OpenMW IS
 now on Vita** — `TheLostPantheon/openmw` (author "KingTorro", 87★, fork of OpenMW/openmw created
@@ -111,6 +122,10 @@ Patterns worth copying:
 - **Assets**: user supplies the Xbox disc contents in `ux0:data/haloce-vita/`; the game shows the
   expected path and exits if the maps are missing; movies must be converted to MP4.
 - **Honest README**: lists performance (20-30 fps), known issues, and "help wanted" items.
+- **v1.1.0 (2026-10-14)**: `app0:shaders.pak` precompiled shader bank (`tools/vita_shader_pack.py`,
+  gxm-null collect + Vita3K `HALO_SHADER_PRECOMPILE`, on-device Cg fallback), CapUnlocker 4th-core
+  helpers, dynamic resolution + profiling presets, crossplay netversion 29, in-game signed update
+  channel; `port/windows|android|linux` in-tree.
 
 ## 4b. Static recompilation (the newest proven route)
 
@@ -131,6 +146,7 @@ Full deep-dive with technique details and a verified project table: `references/
 | **PS2 on Vita (research)** | — | [mirou1611/AstraRecomp](https://github.com/mirou1611/AstraRecomp) | PC-assisted PS2 static recompilation + Vita "AstraRT" runtime; EE interpreter as correctness oracle. Experimental, no playable retail games. |
 | **Vita-native static recompilation toolkit** | — | [sp00nznet/vitarecomp](https://github.com/sp00nznet/vitarecomp) | Reusable recompiler/runtime for recompiling *Vita* games to native C (not emulation; a "N64Recomp for Vita"). Companion ecosystem: `ps3recomp`, `psprecomp`. |
 | **Xbox (original) recomp stubborn** | — | [Xita-Project/xita](https://github.com/Xita-Project/xita) | x86→C lift of XBEs with a Vita runtime; fed into Halo CE. Closed, code remains for study. |
+| **Monster Hunter Tri** (Wii, PowerPC) | user's Wii dump | [Grarak/mh3-wii](https://github.com/Grarak/mh3-wii) | PowerPC → C++ static recomp (C#/.NET8 translator, `recomp.yml`), GX replaced by native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld toolchain; full shipping engine port (VPK + launcher), active 2026-10. |
 
 Repeated here because they contradict earlier "not found" notes: the skill previously said no
 DOSBox, GZDoom, OpenMW or ECWolf ports were found. As of 2026-10-15 that is **no longer fully
@@ -260,7 +276,7 @@ What this means in practice:
 | TheOfficialFloW/gtasa_vita | canonical so-loader, softfp deps, exemplary end-user README |
 | v-atamanenko/soloader-boilerplate | so-loader starter template, FalsoJNI, send/dump targets |
 | Rinnegatamante/yoyoloader_vita, lpp-vita, Homebrodot/platform-vita | runners |
-| BirchWoodGod/halo-ce-vita | custom GXM backend of a decompilation |
+| BirchWoodGod/halo-ce-vita | custom GXM backend of a decompilation; v1.1.0: precompiled `app0:shaders.pak` shader bank, CapUnlocker 4th-core helpers, dynamic resolution + presets, crossplay netversion 29, in-tree `port/windows|android|linux` |
 | SwitchGDX/switch-gdx, SwitchGDX/clearwing-vm | libGDX backend + Java-to-C++ transpiler for Switch/UWP (GPL-2.0); the alternative AOT route, untested on Vita |
 | mmrmagno/stspsvita | Java/libGDX via TeaVM C backend: classpath stubs, generated `GL20` bindings, runtime patches, local-build pipeline for a commercial jar |
 | Hammerill/livearea-specs | LiveArea image specs |
@@ -279,6 +295,7 @@ What this means in practice:
 | ValdiaKun/TimeSplitters | PS2 → Vita native reimplementation of a demo (ISO9660/P5CK/VIF/VU1 pipeline, GS-space preview) |
 | sp00nznet/vitarecomp, ps3recomp, psprecomp | reusable static recompilers/runtime for recompiling Vita/PS3/PSP games to native C |
 | mirou1611/AstraRecomp, Xita-Project/xita | PS2-on-Vita and Xbox-on-Vita static-recomp research/toolchains (xita now closed; feeds halo-ce-vita) |
+| Grarak/mh3-wii | **Wii → Vita static recompilation**: PowerPC→C++ via C#/.NET8 translator (`recomp.yml`), GX → native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld; full shipping engine port |
 | Barabbo/source-engine | Half-Life 2 Vita — GPL Source Engine fork through vitaGL/vitaShaRK, TLSF allocator + pthread; user's data; v0.1.0-beta |
 | WolffsRoom/godot4-vita | Godot 4.8-dev7 → Vita (libgodot.so PIC + Vita loader, GXM 2D backend or VitaGL compat renderer); reference game DodgeTheCreeps-PSVita |
 
