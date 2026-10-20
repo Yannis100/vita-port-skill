@@ -18,6 +18,7 @@ Start from the symptom table; most Vita problems repeat. Items tagged *(unverifi
 | `0x8002710B` NO_MEMORY / `0x805B0002` GXM OUT_OF_MEMORY | raise the budget with `ATTRIBUTE2=12` (reinstall the VPK), shrink the newlib heap, lower vitaGL pools (`vglInitWithCustomSizes`, `vglMemFree` to inspect), drop MSAA |
 | Black screen | `vglInit*` / `vglSwapBuffers` missing; shader compile failing (no `libshacccg.suprx`); GL errors hidden by `NO_DEBUG` (rebuild with `LOG_ERRORS=1`); wrong display pitch or no swap in a custom GXM backend |
 | Game runs, no assets | wrong `ux0:data/<name>/` path; case or separator issues; app expects cwd=assets but cwd is `app0:` |
+| Translated data path silently finds nothing | wrong translated root — validate with a probe FILE (`scripts/qdir.txt`), not a directory-exists test (THUG) |
 | Freezes 1-2 s on first use | runtime shader compilation or first-use cache build; enable a shader cache |
 | Hard crash in deep code | stack overflow on a thread; unaligned access (struct packing); null from failed `sceKernelAllocMemBlock` |
 | Animations frozen or fades stuck at black while the loop runs | the clock has 1 s resolution (`sceKernelLibcTime`, `time()`), so frame delta is 0; use `sceKernelGetProcessTimeWide()` (µs) or `SDL_GetTicks` |
@@ -94,6 +95,24 @@ unsafe builds). Unsafe apps need "unsafe homebrew" enabled in HENkaku settings.
 - **VitaShell FTP** also serves files (port 1337 by default, *unverified*).
 - First milestone on any new port: a black or clear-colour screen that boots on hardware. Then a
   vertical slice. Do not wait until everything compiles to touch hardware.
+
+### Data-path, boot presentation and on-hardware debug (THUG)
+
+Repo: thug-vita-port.
+
+- **Validate a data-path translation with a probe FILE, not a directory-existence test.** The first
+  attempt used the wrong root and silently found nothing — no error, just missing data. Validate
+  with a sentinel file (e.g. `scripts/qdir.txt`). Normalise backslash→forward and document extension
+  renames (`.pre`→`.prx`) (`Code/Sys/Vita/p_filesys.cpp`).
+- **Boot presentation:** draw a custom raw-RGBA boot screen into a CDRAM display buffer BEFORE
+  `vglInit`'s ~2.5 s shader-compiler startup, so the user sees life immediately and stalls are
+  visible. Cache compiled CG shader binaries to `ux0:data/<name>/shd/` keyed by source+type hash
+  (300 ms → few ms per variant).
+- **Clamped CPU overclock via the official `scePowerSet*ClockFrequency` API** (444/222/222/166 MHz).
+  Document it as "Sony underclocks for battery", not a hack — these calls are the official API.
+- **On-hardware complement:** `vita_dbgsrv` (TCP debug server: screenshot + log readback, driven via
+  FTP on a real console) is an alternative to test-harness loops. Keep automated tests primary; use
+  this only as an on-hardware complement.
 
 ## 5. Debugging without hardware
 

@@ -149,6 +149,21 @@ Facts that save time:
   to `--whole-archive -lpthread`, and without it pthread symbols can stay unresolved.
 - C++ works (`samples/hello_cpp_world`). vitaGL needs `-lstdc++` to link.
 
+### 3b. 2003-era codebases: compat header and per-file `-O2` (THUG)
+
+Repo: thug-vita-port (`vita/CMakeLists.txt`, `vita/engine.cmake`).
+
+- **Compat-header pattern**: keep `-std=gnu++98 -fpermissive -fno-exceptions -fno-rtti` for 2003-era
+  code and absorb MSVC-isms in ONE compat header — `__forceinline`, `__fastcall`,
+  `stricmp`→`strcasecmp`, `_msize`→`malloc_usable_size`, `max`/`min`, `WSAGetLastError`→`errno`.
+  Add each entry only when an actual compile error demands it; **no preventive compat**.
+- **Per-file `-O2` discipline**: the whole engine crashes under global `-O2`. Enable
+  `-O2 -fno-strict-aliasing -fno-fast-math` per source file, in validated lots, with measured
+  results. CAUTION: `-ffast-math` at `-O2` silently broke frustum culling (buildings vanishing).
+- **Build-tree note**: a denylist by path prefix (exclude `/Wn32/` `/XBox/` `/DX9/` `/GameSpy/` …,
+  re-include anything under `/Vita/`) beats a whitelist — upstream files enter automatically
+  (evidence: `vita/engine.cmake`).
+
 ## 4. Makefile / manual packaging chain
 
 Pipeline used by Makefile ports and by projects with their own build system:

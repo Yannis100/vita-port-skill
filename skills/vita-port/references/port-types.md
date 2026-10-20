@@ -168,6 +168,26 @@ Community-recommended tooling for binary analysis of closed-source targets (feed
 - rea.tools: online RE suite (assemblers, disassemblers, encoders/decoders, hash tools) useful during asset and
   binary cooking.
 
+## 4c. Native recompile + vitaGL backend with a declared source platform: THUG
+
+Repo: thug-vita-port. A third family: the game's own 2003-era C++ recompiles natively for Vita and a
+hand-written vitaGL backend replaces the original renderer — no decompilation (4), no static lift
+(4b), no .so loader (5).
+
+- **Source and data platforms are chosen separately and must be declared.** Source is the PC/DX9
+  build (kisak-thug PC re-release, `__PLAT_WN32__` path); data is the Xbox USA ISO, declared via
+  `HARDWARE_XBOX` in `p_config.cpp`, which drives hundreds of `Config::GetHardware()` switches.
+  They behave correctly only because the choice is declared — but document it: it has side effects
+  (e.g. music is not paused during save). Assets follow the data platform: `.prx` archives,
+  `.tex.xbx` textures, Xbox ADPCM audio.
+- **Transferable rule:** which original platform your assets/data come from defines a large fraction
+  of port behaviour — make it a deliberate, documented baseline. This is the native-recompile
+  analogue of the so-loader's Android `.so` mapping (section 5).
+- **Subsystem stub discipline** (`p_link_stubs.S`): link-stubs written by hand in Thumb-2 assembly
+  return neutral values; neutral zeroed singleton blocks are wired into the engine's singleton
+  table. Careful: an inline `Instance()` reads the static pointer directly, so overriding only the
+  setter changes nothing. Instrument stub-hit counting to see what is actually reached.
+
 ## 5. Android `.so` loaders
 
 Used for closed-source Android games (GTA SA, Dead Space, Borderlands-class, bc2_vita). Pieces:
@@ -277,6 +297,7 @@ What this means in practice:
 | v-atamanenko/soloader-boilerplate | so-loader starter template, FalsoJNI, send/dump targets |
 | Rinnegatamante/yoyoloader_vita, lpp-vita, Homebrodot/platform-vita | runners |
 | BirchWoodGod/halo-ce-vita | custom GXM backend of a decompilation; v1.1.0: precompiled `app0:shaders.pak` shader bank, CapUnlocker 4th-core helpers, dynamic resolution + presets, crossplay netversion 29, in-tree `port/windows|android|linux` |
+| thug-vita-port | **native recompile of a 2003-era C++ engine + hand-written vitaGL backend** with a declared source/data platform (`HARDWARE_XBOX` data from the Xbox USA ISO, PC source); one compat header, per-file `-O2`, three-port audio, active-low input, boot screen before `vglInit` |
 | SwitchGDX/switch-gdx, SwitchGDX/clearwing-vm | libGDX backend + Java-to-C++ transpiler for Switch/UWP (GPL-2.0); the alternative AOT route, untested on Vita |
 | mmrmagno/stspsvita | Java/libGDX via TeaVM C backend: classpath stubs, generated `GL20` bindings, runtime patches, local-build pipeline for a commercial jar |
 | Hammerill/livearea-specs | LiveArea image specs |

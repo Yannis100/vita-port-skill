@@ -15,6 +15,7 @@ numbers are tagged *(wiki, unverified)*. Anything tagged *(unverified)* needs a 
 8. Input mapping
 9. Audio, network, system dialogs
 10. 32-bit and portability audit
+11. THUG (Tony Hawk's Underground) native recompile
 
 ## 1. Hardware summary
 
@@ -362,6 +363,8 @@ busy-waited target.
   `ux0:data` are the simpler route for homebrew.
 - Mind free space: caching decompressed data can need gigabytes. Document it. VitaKotor2 needs about
   **4 GB free** for the Android game data (1.8 GB OBB + voice packs).
+- **Keep saves in a SEPARATE directory from assets** (`ux0:data/<name>/save/` vs
+  `ux0:data/<name>/Data/`) so a reinstall or data wipe does not remove progress (THUG).
 
 ### 7b. SD-card I/O optimisations (VitaKotor2 patterns)
 
@@ -420,6 +423,13 @@ caching, all behind simple file/hook patterns:
 - **Rear-pad L2/R2 quadrants** (DaedalusX64, `gUseRearpad`): split the rear panel into 4 quadrants
   (left = L2/L3, right = R2/R3 by Y halves) so a console with no L2/R2 can trigger them. Dedicated,
   skippable on PS TV.
+- **Active-low pad polarity** (THUG, `Code/Sys/SIO/Vita/p_siodev.cpp`): an engine that reads the raw
+  DualShock2 byte layout expects buttons ACTIVE-LOW (0xFF minus the pressed bits); inverted polarity
+  is the classic "everything pressed" bug. Vita has only 2 triggers → map Xbox L=L1+L2 / R=R1+R2 to
+  the L/R buttons; optional DualShock layout (PS TV / DS3/DS4 / rear-touchpad halves = L2/R2) via
+  `dualshock_layout=1`.
+- Poll the pad OUTSIDE the task loop for long blocking operations (movies): model a
+  `ProcessDevices()` on the original console backend (`Code/Sys/SIO/Vita/p_sioman.cpp`).
 
 ## 9. Audio, network, system dialogs
 
@@ -487,3 +497,24 @@ libxmp-lite/dr_flac/mpg123) — the proven non-Android audio plumbing on Vita.
 **clang-built Vita workloads are proven beyond VitaSDK GCC**: mh3-wii compiles a large translated C++
 base with clang-21 + lld (VitaSDK only for sysroot/packaging), required `--pic-veneer` for the large
 code, and ships ThinLTO + PGO release builds (see static-recomp.md).
+
+## 11. THUG (Tony Hawk's Underground) native recompile
+
+Repo: thug-vita-port — THUG's own C++ recompiled natively for Vita on vitaGL (see
+`references/port-types.md` section 4c). Runtime lessons that generalise:
+
+- **`vglInitExtended` returns GL_FALSE on SUCCESS and GL_TRUE when the resolution was downgraded.**
+  Treating it as an error check kills the nominal path — do not `if (!vglInitExtended(...)) { fail; }`
+  (evidence: `vita/src/main_vita.cpp`).
+- **Heap split**: keep `sceLibcHeapSize` tiny (4 MB — SceLibc is barely used) and give the newlib
+  heap the big share (192 MB `_newlib_heap_size_user`). A first draft's 128 MB `sceLibcHeapSize`
+  starved vitaGL's splash texture. Raise `sceUserMainThreadStackSize` to 4 MB because the engine
+  puts large QB-parse buffers on the stack. Unlock the extra 109 MB via
+  `VITA_MKSFOEX_FLAGS -d ATTRIBUTE2=12` (365 MB total).
+- **Audio: three separate `sceAudioOut` ports**, because Vita exposes one stream per port — BGM
+  (48 kHz music), VOICE (dialogue), MAIN (software SFX mixer). Decode-on-load for small SFX
+  (~48 KB each). Mix with 32-bit accumulate then clamp (16-bit summing of 24 voices clips audibly).
+  Fixed-point 16.16 resample 44100→48000 with a separate integer index + 16-bit fraction — a single
+  16.16 position overflows at 65536 samples ≈ 1.49 s, breaking looping grind sounds.
+- **Timer must be genuinely real.** A stub timer is a frozen-simulation bug later hunted elsewhere;
+  input/save may be neutral stubs ("no controller / no save"), but time must advance.
