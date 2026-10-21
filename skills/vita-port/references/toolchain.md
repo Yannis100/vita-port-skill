@@ -13,6 +13,7 @@ with `packages.list` and `vitasdk-update`; those are gone (vdpm is now a rootles
 6. Stub libraries and link order
 7. Packaging details (SFO, LiveArea, VPK)
 8. Reviving an old port on the current SDK
+9. Build-system mirrors: waf engines with a Vita branch (Source engine / HL2)
 
 ## 1. Install (Linux / WSL2)
 
@@ -306,6 +307,19 @@ revived build was not run. What the commits had to change, most common first:
 9. **A stub the SDK no longer ships** (`SceLibcBridge_stub` for so-loaders is absent from the
    2026.08 SDK) can be generated from a NID list: `vita-libs-gen -c nids.yml <outdir>` writes a
    CMake project you `add_subdirectory` (fahrenheit-vita runs it at configure time).
+
+## 9. Build-system mirrors: waf engines with a Vita branch (Source engine / HL2)
+
+- The HL2 Vita port (`LargeVegetable/source-engine`, branch `vita`) **reuses the engine's waf
+  build** instead of inventing a new one: a `DEST_OS == 'vita'` branch forces `--togles` +
+  `PLATFORM_VITA` (`wscript` line ~240), and modules build as **PIC `.so` without libc** via
+  `scripts/waifulib/xcompile.py` — the engine's modules are shared objects the bespoke ELF loader
+  maps at runtime (`port-types.md` section 4d).
+- `Barabbo/source-engine` (closed-beta twin) uses the same shape but independent macros:
+  `DEST_OS == 'psvita'` / `PLATFORM_PSVITA`. Do not mix the two forks' branches or flags.
+- **Spelling fix**: the base engine is `nillerusr/source-engine` — **two r's**, NOT "nileusr".
+- No cross-fork reuse etiquette statement exists in LargeVegetable's docs; reusing its work still
+  needs standard GitHub licensing/disclosure practice.
 
 **Verified active projects (2026-10):** `Rinnegatamante/vitaQuake` (142 stars, active 2026-10-03) and
 `Rocroverss/vitasoguide` (updated 2026-10-08) are both alive. Status re-checked 2026-10-15:

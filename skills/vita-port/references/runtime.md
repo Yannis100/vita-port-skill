@@ -16,6 +16,8 @@ numbers are tagged *(wiki, unverified)*. Anything tagged *(unverified)* needs a 
 9. Audio, network, system dialogs
 10. 32-bit and portability audit
 11. THUG (Tony Hawk's Underground) native recompile
+12. Source engine (HL2): multi-pool memory, kernel exec mapping, ToGLES dialect, threading
+13. Source engine (HL2): data-driven cvars, honest performance numbers, packaging/QA
 
 ## 1. Hardware summary
 
@@ -59,6 +61,7 @@ any `sceKernelAllocMemBlock` arenas. Budget them as a sum.
 | Halo CE | 48 MiB heap + 112 MiB arena memblock | 16 MiB game-thread stack |
 | DaedalusX64-vitaGL | 256 MiB (`_newlib_heap_size_user`) | clocks 444/222/222/166, 128 MB max ROM in RAM |
 | VitaKotor2 | 160 MiB + 64 MiB bigalloc pool (max 8×8 MB segs) | `ATTRIBUTE2=12`, 80 MiB vitaGL threshold, 4 GB `ux0:` data |
+| Source engine (HL2, LargeVegetable) | newlib heap 232 MB (`_newlib_heap_size_user`) + 72 MB "large-block" arena via `sceClibMspaceCreate` (≥256 KB allocs) | engine "hunk" committed on demand; GL RAM threshold raised to 88 MB; vitaGL circular pool cut to 9 MB (section 12) |
 
 ## 3. The settings every port should export
 
@@ -518,3 +521,71 @@ Repo: thug-vita-port — THUG's own C++ recompiled natively for Vita on vitaGL (
   16.16 position overflows at 65536 samples ≈ 1.49 s, breaking looping grind sounds.
 - **Timer must be genuinely real.** A stub timer is a frozen-simulation bug later hunted elsewhere;
   input/save may be neutral stubs ("no controller / no save"), but time must advance.
+
+## 12. Source engine (HL2): multi-pool memory, kernel exec mapping, ToGLES dialect, threading
+
+Repo: `LargeVegetable/source-engine` (branch `vita`). Base: `nillerusr/source-engine` (modified
+Source 2017, TF2 2018 leak; D3D9 material system + ToGL/ToGLES). Native recompile via VitaSDK +
+vitaGL with a bespoke ELF so-loader; see `port-types.md` section 4d.
+
+- **kubridge is a hard requirement for engines that dlopen/mmap executable code.** User-level Vita
+  has no exec-mapping; the ELF so-loader fails fast with a user-facing `FatalError` message if the
+  `kubridge` module is not loaded (`launcher_vita/main.cpp`
+  `_vshKernelSearchModuleByName("kubridge", ...)`), mirroring the weak-stub boot check in section
+  4c.
+- **Memory = deliberate multi-pool split**, tuned with instrumentation and documented in comments:
+  - newlib heap 232 MB (`_newlib_heap_size_user`);
+  - separate 72 MB "large-block" arena via `sceClibMspaceCreate` for ≥256 KB allocations
+    (`so_large_heap_init`) — the same big-allocation isolation idea as VitaKotor2's bigalloc
+    (section 4);
+  - engine "hunk" committed on demand;
+  - GL RAM threshold raised to 88 MB.
+  Comments record the measurements that drove the split ("heap peaked at ~150 MB... 32 MB moved
+  back", "kernel free bottomed at 23 MB on tour 5").
+- **vitaGL per-frame circular pool sizing matters as much as the engine heap.** The default 32 MB
+  circular pool spilled into VRAM; the port sets `VITA_GL_CIRCULAR_POOL_SIZE = 9 MB` via a
+  `--wrap=vglInitExtended` override in the launcher.
+- **Renderer swap reuse: keep the engine's own DX9→GLES translator and add a thin dialect
+  down-converter instead of hand-rewriting shaders.** Source path: D3D9 shader source → ToGLES
+  (GLSL ES 3.00) → `togles/linuxwin/vita_glsl.cpp` rewriting to GLSL ES 1.00 → vitaGL's GLSL→Cg →
+  GXM. Plus `appframework/vita_glshims.cpp` provides stand-ins for GL entry points vitaGL lacks
+  (sync objects, FBO).
+- **Threading: pin PC-era multithreading to the Vita's 4 cores** — server frame as a parallel job
+  (`host_thread_mode 1`), `cl_threaded_bone_setup`, `cl_threaded_particles`, render thread pinned
+  to its own core; the engine runs on its own 8 MB-stack thread started by a tiny main thread
+  (`ENGINE_THREAD_STACK_SIZE`).
+- **Physics: keep the engine's native physics** (Source's IVP-based vphysics, forked as
+  source-physics) and tune cost with cvars — do not swap in a new solver.
+
+## 13. Source engine (HL2): data-driven cvars, honest performance numbers, packaging/QA
+
+Same repo as section 12. A PC-era engine copes with **data-driven cvars, not hardcoded cuts**:
+`launcher_vita/main.cpp` `WriteDefaultUserConfig` writes a commented ConVar template
+(`vita_user.cfg`):
+
+- Xbox 360 AI tuning: `ai_default_efficient 1; ai_strong_optimizations 1`; `ai_think_limit_ms 6`,
+  `ai_frametime_limit 0.01`, `ai_vita_idle_think_interval 0.2`
+- `mat_picmip 3` (1/8 textures), `r_shadows 0; r_dynamic 1; r_worldlights 0`, no water
+  reflections, `r_flex 1` + `r_vita_flex_dist`, `g_ragdoll_maxcount 2`,
+  `props_break_max_pieces 4`, `rope_collide 0`, `vita_physics_small_props`, `vita_apc_lock`,
+  `vita_queued_render`, `vita_staticprop_minpixels`
+- Note: **dynamic lighting is KEPT on** (`r_dynamic 1`, flashlight on, `r_newflashlight 0`); what is
+  off is shadows, water reflections, 3D sky, decals, bloom, bump mapping, tonemapping, motion blur,
+  brass/flecks.
+
+**Honest performance numbers (correcting the common rumor spread on Reddit):** renders at
+640×368; mostly 30–60 fps, heaviest fights dip into the low 20s — NOT "25-45 fps". Clock set via
+`scePowerSetArmClockFrequency(444)` = 444 MHz CPU / 222 MHz bus / 222 MHz GPU / 166 MHz Xbar —
+the port does NOT request an overclock (no "500 MHz").
+
+**Packaging/QA details worth replicating:**
+- `param.sfo` `ATTRIBUTE2=12` for extended memory.
+- LiveArea art must be 8-bit palette PNGs with a content-rev bump or the shell caches stale art.
+- A `-vitadebug` flag gates deep logging (10-s perf/memory lines, heap checks, saved frames,
+  shader links) with boot logs rotating `.1`–`.4`.
+- A `vita_screenshot` console command captures the next frame + world material under the
+  crosshair for bug reports.
+- `package_release.sh` refuses to ship builds containing the builder's `$HOME`/username/hostname
+  or TODO/`@PLACEHOLDER@`.
+- A "map tour" harness (`vita_maptour`) auto-loads 10 late chapters to validate
+  memory/shader-slot headroom without human play.

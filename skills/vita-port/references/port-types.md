@@ -18,6 +18,8 @@ Use this to choose the route in step 1 and to find real code to copy. Decision o
 3. Engine reimplementations
 4. Decompilation / custom GXM backend (Halo CE example)
 4b. Static recompilation (N64/PC/PS2/x86 → C, the newest proven route)
+4c. Native recompile + vitaGL backend with a declared source platform: THUG
+4d. Native recompile + custom ELF module loader (Source engine / HL2 on Vita)
 5. Android `.so` loaders
 6. Cross-platform API emulation (3DS→Vita pattern)
 7. Interpreters and runners (and Java)
@@ -68,6 +70,12 @@ Valve's 2020-leaked Source Engine, built on nillerusr/source-engine) shipped `v0
 user copies their own HL2 data; audio partial. Big lesson from the author: the Android build of
 HL2 would not compile for Vita (3 months dead end); the win came from porting the **GPL Source
 Engine source** instead.
+Update (2026-10): the open, *buildable* HL2-on-Vita reference is
+[`LargeVegetable/source-engine`](https://github.com/LargeVegetable/source-engine) (branch `vita`,
+v0.1.0-beta) — a native recompile with a bespoke ELF so-loader (section 4d).
+`Barabbo/source-engine` is a separate **closed-beta twin** that does NOT publish its engine source
+("Source code stays private during beta testing"); treat it as news, not as code to copy. The base
+PC engine is `nillerusr/source-engine` (note the spelling: **"nillerusr", two r's**).
 
 The same "find the portable core, don't port the platform build" lesson applies to utilities, not just
 engines: PKSM keeps its save logic in a platform-agnostic `core/` + shared `common/` with a thin `3ds/`
@@ -187,6 +195,36 @@ hand-written vitaGL backend replaces the original renderer — no decompilation 
   return neutral values; neutral zeroed singleton blocks are wired into the engine's singleton
   table. Careful: an inline `Instance()` reads the static pointer directly, so overriding only the
   setter changes nothing. Instrument stub-hit counting to see what is actually reached.
+
+## 4d. Native recompile + custom ELF module loader: Source engine (HL2 on Vita)
+
+Base engine: `nillerusr/source-engine` — a modified Source engine 2017 (based on the TF2 2018
+leaked source; PC build is a Direct3D 9 material system (`materialsystem/shaderapidx9/`) plus
+ToGL/ToGLES GL translation; targets Windows/Android/OSX/FreeBSD/Linux via waf; NO Vita support
+upstream). Spelling: **`nillerusr`, two r's — NOT "nileusr"**.
+
+Port: [`LargeVegetable/source-engine`](https://github.com/LargeVegetable/source-engine) (default
+branch `vita`, tag `v0.1.0-beta`, asset `hl2_vita-0.1.0-beta.zip` ~20 MB with a published
+SHA-256) is a **native recompile** to ARMv7 Cortex-A9 NEON via VitaSDK + vitaGL — like THUG
+(section 4c) but with a bespoke ELF module loader: `launcher_vita/so_loader.cpp` ("Minimal ELF
+shared object loader for PS Vita") maps PT_LOAD segments via kubridge
+(`kuKernelMemReserve`/`kuKernelMemCommit` — the only user-space exec-mapping), resolves imports
+and runs module ctors. This is a **third flavor** vs THUG (which had no ELF loader): a native
+recompile of a D3D-era engine still needs the Vita homebrew kernel stack (kubridge,
+libshacccg/vitaShaRK) the moment the engine loads modules dynamically.
+
+- Build flags (`launcher_vita/build.sh`): `-mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -mthumb
+  -fno-short-enums`. Launcher links `-lvitaGL -lvitashark -lSceShaccCgExt -lmathneon -lSDL2
+  -lkubridge`.
+- Companion `vitaGL` fork: `LargeVegetable/vitaGL`, branch `hl2-vita` (error logging + the options
+  the port needs).
+- **Transferable rule: next-gen-console reference targets of a PC engine are ideal Vita
+  optimization baselines.** The port deliberately adopts Xbox 360-era Source tuning (AI efficiency
+  settings, alternate ticks, thread splits, lower LOD) instead of inventing new cuts.
+- Separate competing fork: `Barabbo/source-engine` (own `psvita` branch, own v0.1.0-beta release
+  credited "coded by Barabbo, Design by Lucky13x", its own `PLATFORM_PSVITA` macro) DOES NOT
+  publish engine source — "Source code stays private during beta testing". Not a buildable
+  reference; a closed-beta twin.
 
 ## 5. Android `.so` loaders
 
@@ -317,7 +355,10 @@ What this means in practice:
 | sp00nznet/vitarecomp, ps3recomp, psprecomp | reusable static recompilers/runtime for recompiling Vita/PS3/PSP games to native C |
 | mirou1611/AstraRecomp, Xita-Project/xita | PS2-on-Vita and Xbox-on-Vita static-recomp research/toolchains (xita now closed; feeds halo-ce-vita) |
 | Grarak/mh3-wii | **Wii → Vita static recompilation**: PowerPC→C++ via C#/.NET8 translator (`recomp.yml`), GX → native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld; full shipping engine port |
-| Barabbo/source-engine | Half-Life 2 Vita — GPL Source Engine fork through vitaGL/vitaShaRK, TLSF allocator + pthread; user's data; v0.1.0-beta |
+| nillerusr/source-engine | base engine for the HL2 Vita port: modified Source 2017 (TF2 2018 leak), D3D9 material system + ToGLES translation, waf build, no Vita upstream |
+| LargeVegetable/source-engine | **native recompile of the Source engine + bespoke ELF so-loader** (`launcher_vita/so_loader.cpp`, kubridge exec-mapping, section 4d); branch `vita`, v0.1.0-beta, `hl2_vita-0.1.0-beta.zip` ~20 MB with published SHA-256 |
+| LargeVegetable/vitaGL (branch `hl2-vita`) | vitaGL fork used by the HL2 port: error logging + the options the port needs |
+| Barabbo/source-engine | Half-Life 2 Vita — closed-beta twin (coded by Barabbo, design by Lucky13x): does NOT publish engine source ("stays private during beta testing"), own `PLATFORM_PSVITA` macro; not a buildable reference |
 | WolffsRoom/godot4-vita | Godot 4.8-dev7 → Vita (libgodot.so PIC + Vita loader, GXM 2D backend or VitaGL compat renderer); reference game DodgeTheCreeps-PSVita |
 
 Note: `hammerill/ps-vita-porter` is a prior agent-skill repo on this topic; several of its claims

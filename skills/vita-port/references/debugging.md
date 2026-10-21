@@ -114,6 +114,16 @@ Repo: thug-vita-port.
   FTP on a real console) is an alternative to test-harness loops. Keep automated tests primary; use
   this only as an on-hardware complement.
 
+### On-device runtime shader compilation (Source engine / HL2)
+
+Repo: `LargeVegetable/source-engine` (branch `vita`).
+
+- Shaders compile **on the device at runtime** via `libshacccg.suprx` (extracted from the console,
+  ShaRKBR33D) + vitaShaRK; first-visit shader compiles cause hitches, then results are cached in
+  `ux0:data/shader_cache/`. This mirrors the THUG compiled-CG disk-cache pattern above (key by
+  source+type hash, seconds → few ms per variant) — cross-reference it when a first-use hitch shows
+  up in the symptom table.
+
 ## 5. Debugging without hardware
 
 - **Vita3K** (vita3k.org): install firmware (both PUP packages), then `File > Install Archive` or
