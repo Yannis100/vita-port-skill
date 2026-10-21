@@ -66,17 +66,30 @@ machine code, not a target platform's documentable API.
 - **Replace GX, do not emulate it**: every GX caller is ported to native C producers that record
   typed frame packets; a separate render thread draws them. Any unported GX path panics loudly
   (the 201 GX natives route to `PanicLegacyGx`) so gaps surface instead of failing silently.
-- **Shaders offline**: 4,211 vertex + 658 fragment stages precompiled with Sony `psp2cgc.exe`
-  (under Wine/Docker) at build time, packed (~2.1 MB), embedded — the release build has no runtime
-  shader compiler.
+- **Shaders offline**: 4,222 vertex + 1,066 fragment = 5,288-stage bank precompiled with Sony `psp2cgc.exe`
+  (under Wine/Docker) at build time, ~28 MB GXP packed to ~2.2 MB, embedded — the release build has no runtime
+  shader compiler. The bank grows with each shading-behavior port (4,869 stages at v0.1 → 5,120 at tag 0.2 →
+  5,288 at v0.2.1) and is enforced by a static_assert on the NativeShaderVariant size
+  (runtime/src/native_shader_source.h).
 - **Toolchain**: clang-21 + lld for the translated C++ (VitaSDK provides only sysroot/libs/packaging
   via `cmake/toolchains/vita-clang.cmake` adapted from Azahar); `--pic-veneer` linker flag needed
   for the large clang/lld code; ThinLTO + PGO for release.
-- **Sizing**: ~1,650 hot functions ported to native C; kernels kubridge 0.3.1+ and CapUnlocker
+- **Sizing**: ~1,650 hot functions ported to native C; kernels kubridge v0.3.1_hotfix (the tagged release that fixes the v0.3.1 deadlock; bare v0.3.1 is not a formal release and can deadlock) and CapUnlocker
   (4th core) required; CDRAM ~ 3×3.5 MiB frame slots + 16 MiB converted models + ~47 MiB textures.
 - **Order that works** (from the repo docs): recompile + boot on desktop → replace GX family by
   family with native producers → convert assets at load → Vita platform + precompiled shaders →
   profile, port hot functions, move work off the game thread → cut GPU time → ThinLTO+PGO release.
+- **GX-replacement reference**: [encounter/aurora](https://github.com/encounter/aurora) is a complete open GX HLE
+  (Dolphin SDK HAL: TEV→WGSL codegen, FIFO command processor, texture replacement, SQLite/zstd pipeline cache)
+  usable as a study reference for what a GX HLE surface must cover when lifting a decompiled Wii title — while the
+  Vita path still replaces GX with native C producers + psp2cgc shader bank (runtime cache vs build-time bank trade
+  validated by aurora's transferable pipeline cache). Its `lib/gfx/texture_convert.cpp` / `texture_format.cpp` are
+  portable pure C++ for Wii-texture-format conversion.
+- **Status**: v0.1 (2026-10-12) → tag 0.2 (no release object) → v0.2.1 (2026-10-21). v0.2.1 adds:
+  30 fps frame limit (beside 60/off), Wii Remote pointer driven by the Vita touchscreen, online play
+  on MH3SP community servers (native reimplementations of GameSpy/DWC/NHTTP/SSL/socket services),
+  "PV" online-name tag, suspend-safe load fix, and debug-port tools (byte search in guest RAM,
+  action sweeps).
 
 ### PS2 → handheld static recomp discipline (universal-ps2-recompiler)
 

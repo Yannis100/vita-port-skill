@@ -69,6 +69,33 @@ PICA texture combiner (TEV) stages translated to GLSL at runtime:
 - `source()`, `colorOperand()`, `alphaOperand()`, `combine()` generate per-stage GLSL expressions
 - Compiled programs cached as binaries on disk (`ux0:data/<app>/shaders/`)
 
+### Production-Scale HAL Reference (encounter/aurora)
+
+[encounter/aurora](https://github.com/encounter/aurora) is production-scale evidence for this exact route — a GameCube/Wii
+Dolphin-SDK HAL (C++20, MIT) that decompiled PowerPC game source `#include`s unchanged and links against:
+- GX emulated via FF/FD/FEF state-keyed TEV→shader codegen (`lib/gx/shader_info.cpp`, `lib/gx/shader.cpp`,
+  `lib/gx/pipeline.cpp`) + GX FIFO command processor (`lib/gx/command_processor.cpp`); texture replacement included
+- Pipeline cache in SQLite+zstd with background build thread (`lib/gfx/pipeline_cache.cpp`); CARD `.gci`/`.raw` save compat
+- Not Vita-runnable (WebGPU/Dawn → D3D12/Vulkan/Metal; zero Vita support), but the cleanest reference for what a
+  console-SDK HLE surface must cover: GX, GD, OS, PAD, SI, VI, DVD, CARD, AR, THP
+
+Validates the skill's compiled-shader-binary-cache practice (mkwiita's `ux0:data/<app>/shaders/` binaries above):
+a GPU-state-keyed pipeline cache is what makes TEV→shader translation repeatable — the same principle as aurora's
+`lib/gfx/pipeline_cache.cpp`.
+
+#### Counter-example — ACGC: plain C GX reimplementation + precompiled shader bank
+
+aurora's FF/FD/FEF state-keyed runtime codegen + FIFO processor is NOT the only GX-HLE shape that works on the
+Vita. [`Brendonm17/ACGC-Vita-Port`](https://github.com/Brendonm17/ACGC-Vita-Port) (Animal Crossing GameCube → Vita)
+reimplements the GX call surface in plain C — 161 `GX*` functions in `pc/src/pc_gx.c` matching the decomp's
+Dolphin header names — with no state-keyed runtime codegen and no FIFO command processor, and it ships playable.
+TEV state selects among **52 precompiled CG shaders + 1 uber shader** (offline psp2cgc → GXP, embedded in a
+generated 3.4 MB header) by TEV-configuration key at runtime (`pc/src/pc_gx_tev.c`). The required HAL coverage
+is the same and all of it is stubbed in `pc/*.c`: GX/OS/VI/PAD/CARD/DVD (+ AI/AR/DSP), with the Dolphin hardware
+sources excluded from the build. Practical difference: a precompiled bank has **no runtime GLSL compiler in the
+loop** (like mkwiita's on-disk cache) — faster and safer for a fixed game; aurora-style runtime codegen earns
+its complexity only when the game's shader state space is unbounded or unknown in advance.
+
 ### Software DSP Audio Emulator
 
 Full NDSP software emulator with 24 voices:

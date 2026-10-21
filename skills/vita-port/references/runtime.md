@@ -18,6 +18,7 @@ numbers are tagged *(wiki, unverified)*. Anything tagged *(unverified)* needs a 
 11. THUG (Tony Hawk's Underground) native recompile
 12. Source engine (HL2): multi-pool memory, kernel exec mapping, ToGLES dialect, threading
 13. Source engine (HL2): data-driven cvars, honest performance numbers, packaging/QA
+14. ACGC (Animal Crossing GameCube) decomp → vitaGL
 
 ## 1. Hardware summary
 
@@ -222,7 +223,7 @@ file). The VitaSDK `kubridge` package installs its header plus `libkubridge_stub
 - **so-loader patching**: `kuKernelCpuUnrestrictedMemcpy` writes into read-only `.text` (hooks),
   `kuKernelAllocMemBlock` with `SCE_KERNEL_MEMBLOCK_TYPE_USER_RX` (`0x0C20D050`, not in the user
   headers; so-loaders define it) holds trampolines, and `kuKernelFlushCaches` must follow every
-  code write. Old ARM `.so` files that use `SWP` atomics need kubridge v0.3.1+.
+  code write. Old ARM `.so` files that use `SWP` atomics need kubridge v0.3.1_hotfix (SWP support landed in the v0.3.1 commit; the release to pin is the hotfix).
 - **Crash capture**: exception handlers give a register dump without a core dump; see
   `references/debugging.md`.
 - **POSIX `mmap`/`mprotect`**: SonicMastr/SceLibcPosix (2026-10, a C runtime built on SceLibc instead
@@ -589,3 +590,40 @@ the port does NOT request an overclock (no "500 MHz").
   or TODO/`@PLACEHOLDER@`.
 - A "map tour" harness (`vita_maptour`) auto-loads 10 late chapters to validate
   memory/shader-slot headroom without human play.
+
+## 14. ACGC (Animal Crossing GameCube) decomp → vitaGL
+
+Repo: `Brendonm17/ACGC-Vita-Port` (branch `vita`) — a native recompile of the ac-decomp C decomp (GameCube,
+GAFE01_00 USA), the "decomp + custom renderer" route where a C GX-HLE maps onto **vitaGL** instead of a
+hand-written GXM layer (`port-types.md` section 4; shader-bank contrast in `api-emulation.md`). Runtime
+lessons that generalise:
+
+- **C GX-HLE emits GL → a project-private vitaGL fork.** `vita/rebuild_vitagl.sh` builds the
+  `async-compressed-tex-prep` branch (`vglPrepareCompressedTexture2D` / `vglCommitPendingTexture` for
+  off-thread block-compressed texture uploads), patches a Cg row-major `M1*M2 → M2*M1` matrix-multiply bug,
+  tunes `MAX_CUSTOM_SHADERS 2048` / `UNIFORM_CIRCULAR_POOL_SIZE 8 MB`, and installs to
+  `$VITASDK/arm-vita-eabi/acgc/` (its own SDK dir) so the fork cannot collide with the shared vitaGL.
+- **3-core thread split with explicit affinity + `__sync_synchronize` fences.** core0 = game+submit; core1 =
+  the emu64 display-list interpreter worker (~92% of frame time; 512 KB stack, priority `0x10000100`); core2 =
+  the "prededup" pass. `vita_pin_hidden_threads()` re-pins the SDL/VitaGL/system threads after creation
+  (`vita/src/vita_platform.c`).
+- **Deferred double-buffered draw submission.** `vita_gx_cmdbuf.c` (~2260 lines) records + prededups + culls +
+  builds indices on the workers; `submit_frame` only replays (`pc_gx_flush_vertices` →
+  `vita_gx_flush_vertices_cmdbuf`).
+- **Memory:** 104 MB newlib heap + 4 MB main stack (1 MB caused corruption) under `ATTRIBUTE2=12`. **Keep the
+  perf-log `FILE*` open once** — a per-call `fopen` triggers an eMMC metadata sync that drops frames.
+- **Sleep-aware lifespan:** the Vita monotonic clock stops during suspend, so the day/night cycle re-anchors at
+  boot; `scePowerRegisterCallback` on a parked thread is the only pre-kill signal; auto-save only while walking
+  outside (`vita/README.md`).
+- **Embedded sub-console swap:** replace the embedded NES core (`ks_nes_core.cpp` PPC-ASM NES CPU/PPU) with
+  Nofrendo (scanline-based, 40+ mappers); keep game-side `famicom.cpp` ROM loader + the `vita_nes_fixnes.c`
+  `ksNesDraw*` API shim.
+- **Honest perf posture:** no headline FPS/clock; resolution scale 100/75/50% = 960x544/720x408/480x272,
+  MSAA 0/2/4; "60 fps" is a design target, not a device-verified claim.
+- **HD texture packs:** Dolphin DDS (BC7/BC3) → DXT1/DXT5 conversion; V3 pre-swizzled GXM Morton layout =
+  direct memcpy to VRAM vs V2 linear = swizzle on worker; 48 MB `VTC_VRAM_BUDGET` LRU with tombstones +
+  refcounts (`vita/src/vita_vtc.c`).
+- **Build/deploy:** WSL builds sync to ext4 (NTFS is 10-50x slower); `deploy.sh` hot-deploys just `eboot.bin`
+  over VitaCompanion FTP ports 1337/1338.
+- **Multiplayer (port-added):** up to 4 players ad-hoc `scePspnetAdhoc` / LAN / Internet UDP 19520,
+  NAT-PMP→UPnP, CGNAT detection, IME overlay chat — the port outgrew the original game's LAN scope.

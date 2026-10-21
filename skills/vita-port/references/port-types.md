@@ -35,7 +35,7 @@ Use this to choose the route in step 1 and to find real code to copy. Decision o
 | SDL2 + OpenGL (open source) | vitaGL (direct, or `sdl2_vitagl`); no GL3 core / geometry / compute | days to weeks for Quake-class; months for modern GL |
 | Engine reimplementation | check upstream Vita backends first | data-only packaging if a port exists; weeks for a new engine |
 | Cross-platform API emulation (e.g. 3DS libctru→Vita) | reimplement source API on Vita → vitaGL; see mkwiita, `references/api-emulation.md` | weeks to months; requires shader translation |
-| Decompilation / custom renderer | write a GXM device layer | months; needs a CPU-profile loop |
+| Decompilation / custom renderer | write a GXM device layer — or, when the decomp ships a C-level GX HLE, map it onto vitaGL (GL→GXM) instead (ACGC is the proof; section 4) | months; needs a CPU-profile loop |
 | Static recompilation (run the original binary as C) | lift the original machine code (x86, MIPS, N64 RSP, ARM) to C ahead of time with a recompiler (N64Recomp, n64recomp, or a custom lifter), then supply GPU/audio/input backends; see section 4b | months; N64/PS1-class proven playable (Conker, BoI, GT2); PS2/PS3/Xbox research-grade |
 | Android `.so` loader | needs ARMv7 lib + GLES1/2; not for arm64-only, Unity (`libunity.so`), libgdx/Java, FMOD Ex | weeks to months; reverse engineering |
 | Interpreter / runner | reuse lpp-vita, YoYo loader, Homebrodot | low if the runner exists |
@@ -135,6 +135,21 @@ Patterns worth copying:
   helpers, dynamic resolution + profiling presets, crossplay netversion 29, in-game signed update
   channel; `port/windows|android|linux` in-tree.
 
+### Decomp with a C-level GX HLE mapped onto vitaGL: ACGC (Animal Crossing, GameCube)
+
+Same "decomp + custom renderer" family as Halo CE, but the counter-proof of the mapping step: when the
+decomp's renderer is a **C reimplementation of the GX call surface**, map it onto **vitaGL (GL→GXM)**
+instead of a hand-written GXM device layer. Repo: `Brendonm17/ACGC-Vita-Port` (branch `vita`), the ac-decomp
+C decomp (ACreTeam/ac-decomp, GAFE01_00 USA, Metrowerks) forked from the PC port (flyngmt/ACGC-PC-Port).
+No static lift — the decomp recompiles natively; the Dolphin GX/OS/VI/PAD/CARD/DVD hardware sources are
+excluded and `pc/src/pc_gx.c` reimplements 161 `GX*` functions whose GL output feeds a project-private
+vitaGL fork. TEV state is 52 precompiled CG shaders + 1 uber shader, offline psp2cgc→GXP in a generated
+3.4 MB header, selected by TEV key at runtime — no runtime GLSL compiler. Mature: 8 releases
+(v0.1.0a 2026-04 → v0.5.0 2026-09 "Multiplayer Update"), 4-player online multiplayer, NES subsystem.
+- **User-supplied disc image + CC0 decomp is a second accepted Nintendo-target distribution model**
+  (GameCube here): the decomp is CC0, the PC port layer MIT, and the user supplies their own GC disc ISO at
+  `ux0:data/AnimalCrossing/rom/` — the same user-dump model as mh3-wii.
+
 ## 4b. Static recompilation (the newest proven route)
 
 As of late 2026 the community's most productive new route is **ahead-of-time static recompilation
@@ -154,7 +169,7 @@ Full deep-dive with technique details and a verified project table: `references/
 | **PS2 on Vita (research)** | — | [mirou1611/AstraRecomp](https://github.com/mirou1611/AstraRecomp) | PC-assisted PS2 static recompilation + Vita "AstraRT" runtime; EE interpreter as correctness oracle. Experimental, no playable retail games. |
 | **Vita-native static recompilation toolkit** | — | [sp00nznet/vitarecomp](https://github.com/sp00nznet/vitarecomp) | Reusable recompiler/runtime for recompiling *Vita* games to native C (not emulation; a "N64Recomp for Vita"). Companion ecosystem: `ps3recomp`, `psprecomp`. |
 | **Xbox (original) recomp stubborn** | — | [Xita-Project/xita](https://github.com/Xita-Project/xita) | x86→C lift of XBEs with a Vita runtime; fed into Halo CE. Closed, code remains for study. |
-| **Monster Hunter Tri** (Wii, PowerPC) | user's Wii dump | [Grarak/mh3-wii](https://github.com/Grarak/mh3-wii) | PowerPC → C++ static recomp (C#/.NET8 translator, `recomp.yml`), GX replaced by native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld toolchain; full shipping engine port (VPK + launcher), active 2026-10. |
+| **Monster Hunter Tri** (Wii, PowerPC) | user's Wii dump | [Grarak/mh3-wii](https://github.com/Grarak/mh3-wii) | PowerPC → C++ static recomp (C#/.NET8 translator, `recomp.yml`), GX replaced by native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld toolchain; full shipping engine port (VPK + launcher), active 2026-10 (v0.2.1, 2026-10-21). |
 
 Repeated here because they contradict earlier "not found" notes: the skill previously said no
 DOSBox, GZDoom, OpenMW or ECWolf ports were found. As of 2026-10-15 that is **no longer fully
@@ -231,7 +246,7 @@ libshacccg/vitaShaRK) the moment the engine loads modules dynamically.
 Used for closed-source Android games (GTA SA, Dead Space, Borderlands-class, bc2_vita). Pieces:
 `so_util` (load the ARMv7 `.so`), imports resolved to native functions (GL/EGL → vitaGL),
 FalsoJNI as a fake JVM, kubridge (`kuKernelCpuUnrestrictedMemcpy` to hook read-only `.text`, a
-`USER_RX` block for trampolines, `kuKernelFlushCaches`; v0.3.1+ also enables `SWP` for old ARM
+`USER_RX` block for trampolines, `kuKernelFlushCaches`; v0.3.1_hotfix also enables `SWP` for old ARM
 code; versions and the weak-stub boot check in `runtime.md` section 4c), `_newlib_heap_size_user` + `ATTRIBUTE2=12`,
 **everything softfp** (SDK, vitaGL `SOFTFP_ABI=1`, openal, mpg123). Wrap `malloc` with `vglMalloc`
 for large allocations. Needs an `UNSAFE` eboot and plugins (kubridge, fd_fix), so documentation
@@ -354,7 +369,8 @@ What this means in practice:
 | ValdiaKun/TimeSplitters | PS2 → Vita native reimplementation of a demo (ISO9660/P5CK/VIF/VU1 pipeline, GS-space preview) |
 | sp00nznet/vitarecomp, ps3recomp, psprecomp | reusable static recompilers/runtime for recompiling Vita/PS3/PSP games to native C |
 | mirou1611/AstraRecomp, Xita-Project/xita | PS2-on-Vita and Xbox-on-Vita static-recomp research/toolchains (xita now closed; feeds halo-ce-vita) |
-| Grarak/mh3-wii | **Wii → Vita static recompilation**: PowerPC→C++ via C#/.NET8 translator (`recomp.yml`), GX → native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld; full shipping engine port |
+| Grarak/mh3-wii | **Wii → Vita static recompilation**: PowerPC→C++ via C#/.NET8 translator (`recomp.yml`), GX → native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld; full shipping engine port, active 2026-10 (v0.2.1, 2026-10-21) |
+| Brendonm17/ACGC-Vita-Port | **GameCube decomp (ac-decomp, C) → Vita native recompile**: C GX-HLE (161 `GX*` in `pc/src/pc_gx.c`) on a project-private vitaGL fork, deferred double-buffered command queue (`vita_gx_cmdbuf.c`), 52 precompiled TEV shaders + uber (offline psp2cgc GXP header), 3-core split, NES via Nofrendo, 4-player online multiplayer; 8 releases, active 2026 |
 | nillerusr/source-engine | base engine for the HL2 Vita port: modified Source 2017 (TF2 2018 leak), D3D9 material system + ToGLES translation, waf build, no Vita upstream |
 | LargeVegetable/source-engine | **native recompile of the Source engine + bespoke ELF so-loader** (`launcher_vita/so_loader.cpp`, kubridge exec-mapping, section 4d); branch `vita`, v0.1.0-beta, `hl2_vita-0.1.0-beta.zip` ~20 MB with published SHA-256 |
 | LargeVegetable/vitaGL (branch `hl2-vita`) | vitaGL fork used by the HL2 port: error logging + the options the port needs |
