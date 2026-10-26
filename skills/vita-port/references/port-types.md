@@ -413,6 +413,31 @@ A port is "done" only when a reviewer can verify, on hardware:
 - A documented test device/firmware (3.60/3.65/3.68) and the exact plugin set (kubridge, fd_fix, etc.).
 If any item is knowingly unverified, ship a "known gaps" section rather than calling the release final.
 
+**A status line like "compiles, links, packages" is not "runs".** Real example (TP-on-Vita): a
+session reported renderer/input/audio as "done, verified live in the ELF", but (a) the rebuilt VPK
+did not contain its own last source edits (stale generated tree, see `toolchain.md` §3), (b)
+"dead-code no-op stubs" were actually linked into the ELF, and (c) the claimed host tests for the
+shader/texture decoders did not exist. Worth doing before believing a summary about what is and
+isn't there:
+- Confirm a dogfooded artifact exists that provably contains the edits (`nm` the exact `.velf`/ELF
+  the VPK packaged, or `grep` the unpacked VPK's binary). `--unresolved-symbols=report-all` at link
+  makes the presence of a called function itself a check.
+- Distinguish "linked in" from "reached at runtime": no-op stub entry points can be linked yet never
+  called; check for actual callers before calling them dead code.
+- Only "executed on a Vita / Vita3K" (or a host render harness) makes a code path verified; "passes
+  on the host" and "compiles" are each weaker and should be labeled as such.
+- **A stated reason for a fix is a claim too; test it.** In the same port a helper wrote "needs
+  `SceGpuEs4_stub libScePiglet_stub` for libvitaGL's sceGxm refs"; relinking without them worked, and
+  relinking without the trailing `SceGxm_stub` is what broke (link order). A wrong rationale gets copied
+  into docs and future builds. Before keeping or repeating a cause, remove the fix and see if the
+  symptom returns.
+- **Trace the no-arguments boot path.** An app that boots only from a CLI flag or a saved setting
+  (`--dvd`, a ROM path) hangs on a blank screen on a console, where nothing passes arguments and the
+  desktop UI that would ask is stubbed out. Read `main` down to the first frame with empty argv and an
+  empty config, then give the Vita entry point a way to find the data (probe `ux0:data/<app>/`, inject
+  the argument) and make a missing or unreadable file say so on screen. Probe only formats the reader
+  supports (a probe list copied from another project named `.gcz`/`.z64` for a reader that rejects both).
+
 ## 5b. Android .so Loader Ports (deep dive)
 
 ### 6.1 Boilerplate

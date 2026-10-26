@@ -141,6 +141,11 @@ Some games rely on platform-specific memory being zeroed. Two complementary stra
 
 Reference: [mkwiita's zeroed_new.cpp](https://github.com/boomannotjeff/mkwiita/blob/master/platform/vita/src/zeroed_new.cpp)
 
+**First boot.** Trace the no-arguments, empty-config start path before the first test: on a Vita nothing
+passes `--rom`-style flags and the desktop UI that asks for the data file is usually stubbed, which
+shows as a blank screen. Probe `ux0:data/<name>/` for the user's files (only formats your reader
+supports) and say on screen when they are missing.
+
 Typical replacements: window and input (dual sticks, no L2/R2/L3/R3, front and rear touch, gyro),
 data paths (`app0:` is read-only, write to `ux0:data/<name>/`), audio (48 kHz S16), networking
 (load `SCE_SYSMODULE_NET`), threads (3 user cores), timing.

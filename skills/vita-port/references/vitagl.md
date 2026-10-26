@@ -59,6 +59,11 @@ If the API in a port's old code does not exist, grep `source/vitaGL.h` in the vi
   `glGetTexImage`, `glPrimitiveRestartIndex`, `glLogicOp`, `glBindFragDataLocation`,
   `glVertexAttribIPointer`, `glTexBuffer`, `glDrawArraysIndirect`, `glDrawBuffers` (one colour
   attachment, no MRT). `GL_FLAT` becomes smooth; instance divisor > 1 clamps to 1.
+- **Checked with `nm libvitaGL.a`** (the vdpm build of 2026-09-11, so re-check yours): `glBlendColor`,
+  `glBlendFunci`, `glInvalidateFramebuffer`, `glDiscardFramebufferEXT`, `glDrawBuffers` and `glLogicOp`
+  are **absent** from the archive (desktop-GL/GLES code usually assumes them), so a call fails at link time
+  or has to be removed; do not rely on them. Workaround for a constant blend colour: pass it as a shader
+  uniform and do the blend arithmetic in the fragment shader.
 - **Limits**: max texture/renderbuffer/viewport 4096; cube map 1024; vertex uniform vectors 128;
   **fragment uniform vectors 16**; varyings 8; vertex attribs 16; texture units 16; shaders 2048,
   programs 1024. `glDrawArrays` / `glDrawArraysInstanced` take at most **49152 (0xC000) vertices**:
@@ -92,7 +97,9 @@ Link line copied from the official samples (`glesgear`, `uniform_buffers`):
 -lvitaGL -lstdc++ -lc -lm -lmathneon -lvitashark -lSceShaccCgExt -ltaihen_stub -lSceShaccCg_stub \
 -lSceGxm_stub -lSceDisplay_stub -lSceCommonDialog_stub -lSceAppMgr_stub -lSceKernelDmacMgr_stub
 ```
-Add `-lSceSysmodule_stub -lSceCtrl_stub -lSceAppUtil_stub` when used. Base CFLAGS in vitaGL:
+Add `-lSceSysmodule_stub -lSceCtrl_stub -lSceAppUtil_stub` when used. With CMake's
+`target_link_libraries`, keep `SceGxm_stub` **after** `vitaGL` even if it already appears earlier in
+the list (a static stub archive only satisfies references that come before it on the command line). Base CFLAGS in vitaGL:
 `-O3 -ffast-math -mtune=cortex-a9 -mfpu=neon -mfp16-format=ieee`.
 
 Build flags (full list in the vitaGL README; group by purpose):
@@ -262,6 +269,14 @@ Real values: bc2_vita newlib 192 MiB + `vglInitWithCustomThreshold(0,960,544,8<<
   `varying`, `texture2D`, `gl_FragColor`). `textureSize` exists only in a vitaGL built with
   `HAVE_GLSL_TEXTURE_SIZE` (mip 0 only); the vdpm package is not. Fragment shaders have only 16
   uniform vectors.
+- **Uniform budget pressure is real, not theoretical.** A generated-GLSL port that maps a rich
+  fixed-function state (GameCube TEV: 4 TEV regs + 4 KColors + fog + texture scales + indirect
+  matrices) into `uniform vec4 uFS[]` arrays measured: ~5–8% of all random state configs exceed the
+  16-fragment-vec4 cap, and lit materials already use ~108 of the 128 vertex vec4s (so adding per-texture
+  matrix uniforms overflows the vertex stage). If your generator can enumerate its config space,
+  assert/measure the cap at generation time (a bringup warning beats a silent `glLinkProgram` failure
+  on a `NO_DEBUG` build) and validate with a host linker test over random configs (TP-on-Vita pattern:
+  `tests/host/shader/` linked 7,000 random configs, 0 failures).
 - Translator quirks (verified in `source/shaders/glsl_translator_hdr.h` at `a85cb8d`): the preamble
   `#define`s these identifiers, so **a shader variable or function with one of these names breaks**:
   `s`, `t`, `st`, `ts`, `ss`, `tt` (swizzles), `matrix`, `Matrix`, `sampler`, `vgl`, `mod`, `atan`,

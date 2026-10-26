@@ -434,6 +434,14 @@ caching, all behind simple file/hook patterns:
   `dualshock_layout=1`.
 - Poll the pad OUTSIDE the task loop for long blocking operations (movies): model a
   `ProcessDevices()` on the original console backend (`Code/Sys/SIO/Vita/p_sioman.cpp`).
+- **SDL3 gamepad layer (not SceCtrl) still needs the SDL event pump.** If the port already uses
+  SDL3's `SDL_Gamepad`/`SDL_GetGamepadAxis` API (Aurora/encounter) instead of raw SceCtrl, the Vita
+  backend maps the physical controls to a **virtual "Vita controller"** gamepad, and controller
+  hotplug is driven by `SDL_PollEvent` — on desktop that pump lives in the SDL2/3 window loop, but a
+  Vita app has no window, so you must pump `SDL_EVENT_GAMEPAD_ADDED`/`REMOVED` yourself each frame
+  (`SDL_Init(SDL_INIT_GAMEPAD|SDL_INIT_JOYSTICK|SDL_INIT_HAPTIC|SDL_INIT_SENSOR)` once, then on ADDED
+  call the input layer's `add_controller(which)`, on REMOVED only drop it if it is still assigned to
+  a player). Verified pattern: TP-on-Vita `aurora_update()` in `vita/aurora/backend.cpp`.
 
 ## 9. Audio, network, system dialogs
 

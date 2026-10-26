@@ -57,6 +57,9 @@ unsafe builds). Unsafe apps need "unsafe homebrew" enabled in HENkaku settings.
 | implicit-declaration / int-conversion errors in old C | `-std=gnu11 -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types` (GCC 15) |
 | `configure: cannot guess build type` | refresh `config.sub`/`config.guess` *(unverified)* |
 | vitaGL symbols missing | check library order; `-lmathneon -lvitashark -lSceShaccCgExt -ltaihen_stub -lSceShaccCg_stub` |
+| undefined `sceGxm*` referenced from `libvitaGL.a` although `SceGxm_stub` is in the list | static stub archives are order-sensitive: `SceGxm_stub` must come **after** `vitaGL` (an early copy does not help). `SceGpuEs4_stub` / `libScePiglet_stub` are not needed for this (checked by relinking) |
+| `vita-elf-create: Cannot allocate N bytes for SCE data at end of segment 0; segment 1 overlaps` | the linker script puts the data segment at the next 64 KiB boundary (`DATA_SEGMENT_ALIGN(0x10000, 0x10000)`) and vita-elf-create appends ~5 KiB of SCE metadata behind the text segment, so about 8 % of text sizes fail and any small code change can trigger it. Check with `arm-vita-eabi-readelf -lW <elf>` (gap = 2nd LOAD vaddr − 1st LOAD vaddr − memsz). Fix: add a `.rodata` filler of a few tens of KiB (`const unsigned char pad[32*1024] = {1};`) so the text ends well below a boundary, and fail the build early with a gap check after link |
+| `vita-elf-create: ...<name> is not an ELF file` (file size still changing) | the ELF is half written: a long build was piped into `head`/interrupted and an orphaned `ld` is still running. Wait for `ld` to exit (`pgrep ld`), then rerun the build **without** a pipe |
 | so-loader unresolved symbols or wrong struct sizes | map in `dynlib.c`/`java.c`; wrap bionic vs newlib structs; check `__stack_chk_guard` |
 
 ## 4. Debugging with hardware
@@ -135,6 +138,22 @@ Repo: `LargeVegetable/source-engine` (branch `vita`).
 - Android so-loader ports essentially require hardware.
 - Without any console you can: build, run `check_vpk.py`, run the Linux test target of a
   two-backend project (Halo CE style), and review code for the failure causes above.
+- **Host GLES2 harness for a vitaGL renderer** *(verified on a 2026-10 port; replay never reached hardware)*:
+  Mesa llvmpipe through EGL *surfaceless* gives a headless GLES2 context
+  (`eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, ...)`, `EGL_OPENGL_ES2_BIT`, pbuffer or FBO only,
+  `libEGL`/`libGLESv2` from `libegl-dev libgles-dev`). Compile the renderer's shader generator and
+  decoders for x86 against the VitaSDK headers (symlink `$VITASDK/arm-vita-eabi/include/vitaGL.h` etc. into
+  an include dir) and feed the generated GLSL ES 1.00 to Mesa to check it compiles and links. That catches
+  GLSL errors, uniform-count blowups and decode bugs. It does **not** check vitaGL's Cg translator, the
+  128-vec4 vertex / 16-vec4 fragment uniform caps, FBO row order or speed; run those on hardware.
+- **Test hygiene for such harnesses**: (1) fuzz only inside the input domain the real API allows. Invalid
+  inputs hit the engine's own fatal-error path and abort, which is correct and tells you nothing. A stub
+  logger that swallows `Log.fatal` turns this into a silent `rc=134`; make test stubs print to stderr.
+  (2) Where upstream has a reference implementation (texture decoders, vertex formats), run the port's code
+  and the upstream code on the same inputs through a thin shim and compare byte for byte. (3) Add a
+  **negative control**: corrupt one byte or one rule on purpose and confirm the test fails. A test that
+  cannot fail is not evidence. (4) Run under ASan/UBSan (`-fsanitize=address,undefined
+  -fno-sanitize-recover=undefined`).
 
 ## 6. Crash dumps
 

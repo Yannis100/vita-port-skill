@@ -145,6 +145,27 @@ Facts that save time:
 - `FILE <src> <dst>` accepts a directory (`FILE sce_sys sce_sys`).
 - Release build: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release` (adds `-O3 -DNDEBUG`). VPK lands at
   `build/<proj>.vpk`; the unstripped ELF for crash symbolication is `build/<proj>` (no extension).
+- **Stale generated sources are the top "build was fine" trap.** If the build tree is generated
+  from a source tree by a script at configure time (e.g. a merged/patch overlay tree that has to be
+  reassembled), a plain `cmake --build` silently reuses the old generated file and the new VPK does
+  NOT contain your last edits — confirmed on a real port (TP-on-Vita `build_aurora_tree.py`). Rules:
+  (a) add the generator script and every source it consumes to `CMAKE_CONFIGURE_DEPENDS` so any edit
+  re-runs it; (b) after editing a generated source, verify the edit is in the artifact
+  (`grep`/`nm` the rebuilt object or ELF, or the extracted VPK file), do not assume; (c) a fresh
+  configure (`cmake -S . -B build`) is the cheap way to be sure. `file(GLOB ... CONFIGURE_DEPENDS)` is
+  false assurance here: it only re-checks the **list** of files (added/removed), not their contents, so
+  list the files themselves in `CMAKE_CONFIGURE_DEPENDS`.
+- **Host-code traps when a 64-bit desktop codebase meets newlib/ARM32**: (a) newlib's `<ctype.h>` defines
+  macros `_C`, `_U`, `_L`, `_N`, `_S`, `_P`, `_X`, `_B`; they collide with template parameters and
+  enumerators of those names (`#undef` after including, or rename). (b) VitaSDK ships an old `imgui.h`
+  (plus `imgui_internal.h`, `imgui_vita*.h`) in `$VITASDK/arm-vita-eabi/include`; if the project vendors
+  a newer Dear ImGui, make sure the project's include path comes first or you get mixed-version ODR bugs.
+  (c) Endianness detection lists such as `defined(__x86_64__) || defined(__aarch64__)` usually lack
+  `__arm__` (use `defined(__arm__) && !defined(__ARMEB__)`), so a little-endian Vita is treated as
+  big-endian and every byte swap is inverted. (d) `static_assert(sizeof(T) == N)` written for LP64 fails
+  or, worse, was removed to make the build pass; recompute for 4-byte `long`/pointers.
+- **Link layout:** `vita-elf-create` may fail with `Cannot allocate N bytes for SCE data at end of segment
+  0`, depending on the text size modulo 64 KiB. See `references/debugging.md` section 3.
 - Add `-g` to keep symbols for `vita-parse-core`; do not `strip` the file you will symbolicate.
 - Link `-pthread` (or `Threads::Threads`), not bare `-lpthread`: the GCC driver maps `-pthread`
   to `--whole-archive -lpthread`, and without it pthread symbols can stay unresolved.
