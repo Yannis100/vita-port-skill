@@ -162,6 +162,27 @@ black or blank screen. Cheap things that turn that into a message:
 - **Vita3K** (vita3k.org): install firmware (both PUP packages), then `File > Install Archive` or
   `Vita3K <path.vpk>`; CLI options include `-r <TITLEID>`, `-l <0-6>` log level, `-B OpenGL|Vulkan`,
   `-Z <args>`. Logs in `Vita3K.log`. Needs x86-64 with OpenGL or Vulkan.
+### Three ways an emulator run lies to you *(each cost a session on a 2026-11 port; all measured)*
+
+Before trusting anything a headless run tells you, close these three holes.
+
+1. **A truncated log line is a SIGKILL, not a hang.** A driver script that ends with
+   `kill $pid; sleep 2; kill -9 $pid` (the common shape) cuts the last line mid-write, because stdio
+   into a pipe is block-buffered. A log ending at `compiling gx-1a49877e: vertex 1113` with no
+   `ready in` after it looks exactly like a compiler hang; the same shader had compiled in 283 ms an
+   hour earlier. **Before believing a hang, grep earlier runs for the same work item.** Report final
+   state through stderr or a warning-level logger, which are unbuffered.
+2. **A steady frame time can be an empty loop.** A 33.33 ms/frame reading that never varies is
+   suspiciously exactly the sound of a simulation clock pacing a loop that draws nothing. Forcing an
+   interpolation/presentation split in a port whose presentation path was never implemented produced
+   precisely that: 30.0 fps equivalent and 263-byte blank PNGs. **Capture pixels in the same run as
+   the timing number**, and assert on them: a blank frame is ~263 bytes, a rendered one tens to
+   hundreds of KB, and the PNG header says `mode=RGB` versus a palette/index type.
+3. **Startup can consume the whole run.** Shader compilation at 200-700 ms per program, built lazily
+   up to ~70 programs, can eat a 60 s budget so a 300-frame sampling window never fires. Size the
+   window to the run (<=120 frames), report **deltas over a fixed window** rather than a cumulative
+   average, and check that the window actually appeared before quoting anything.
+
 - **Vita3K headless, from a script** *(verified once, 2026-10, Vita3K v0.2.1 on a WSL2 host; the app was a port that stops at a
   text screen, so only boot, loading and that screen were exercised)*: `Vita3K --firmware <PSVUPDAT.PUP>` installs the
   user's own firmware; `Vita3K <app.vpk>` installs and starts the app; `--frontend sdl` gives a plain window that
