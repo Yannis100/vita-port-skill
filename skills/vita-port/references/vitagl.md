@@ -327,6 +327,35 @@ Real values: bc2_vita newlib 192 MiB + `vglInitWithCustomThreshold(0,960,544,8<<
 - Debug: build vitaGL with `HAVE_SHARK_LOG=1` and `LOG_ERRORS=1`, read `glGetShaderInfoLog`,
   dump translated source with `DEBUG_GLSL_TRANSLATOR=1`.
 
+#### Caching CPU-decoded vertices (GLES2/GXM have no storage buffers or vertex byte-swapping)
+
+Emulating a fixed-function console's vertex fetch on the Vita usually means decoding every vertex on
+the CPU into interleaved floats. A content-addressed cache of that decode is a known win on hardware
+(one 2026-11 port profiled 66 ms of vertex work in a 154 ms frame on a real Vita 1000), but it is easy
+to build one that is **silently wrong**, which is far worse than slow. Three rules, all learned by
+getting them wrong first:
+
+1. **Key on content, never on offsets.** A frontend that rebuilds its storage buffer every frame
+   (`push_storage`-style) invalidates offsets immediately; an offset that meant byte X in frame N
+   means something else in N+1.
+2. **Key every buffer the decode reads, not just the obvious one.** A draw's direct attributes come
+   from the vertex range, but INDEX8/INDEX16 attributes come from a *separate* snapshotted array
+   buffer. A key built as "vertices + a byte count for the arrays" but hashed starting at the vertex
+   pointer hashes the wrong bytes, overreads, and lets two draws with identical index bytes over
+   different arrays **false-hit** and swap geometry. Build real per-array spans, hash them into a
+   digest, and copy their bytes into the entry.
+3. **Key the pipeline state too.** The decode depends on attribute formats (comp type, count, `frac`
+   scale, NBT3 slices) and on the draw's immediate data (current matrix index, per-attribute array
+   starts). Identical source bytes under two pipelines decode differently.
+
+Then budget honestly. Time the component internally with `steady_clock` rather than inferring it from
+frame time (an emulator's noise swamps it), and compare **decode saved** against **hash + copy paid**.
+On that port: 74% hit rate, decode halved from 474.3 to 382.9 ms per 120 frames, overhead 177.1 ms —
+a real ~86 ms per 120 frames on the component, but the component was only 4-6 ms of a 130 ms emulated
+frame, so it was left behind a compile-time switch for a hardware run. Also watch the source-span cap:
+20k-47k requests per 120 frames exceeded 32 KiB and were never cacheable at all, and evictions roughly
+equalled misses, so the working set was larger than the 12 MiB budget.
+
 ### DaedalusX64 patterns (N64 emulator, Rinnegatamante)
 
 - **One GL backend, two targets**: the emulator's HLE graphics keeps a single Fast3D OpenGL backend that runs on

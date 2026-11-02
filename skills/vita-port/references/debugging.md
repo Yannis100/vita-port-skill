@@ -183,6 +183,25 @@ Before trusting anything a headless run tells you, close these three holes.
    window to the run (<=120 frames), report **deltas over a fixed window** rather than a cumulative
    average, and check that the window actually appeared before quoting anything.
 
+**The fourth, which is about what you can measure at all.** An emulator executes guest ARM on a host
+CPU roughly an order of magnitude faster than the Vita's Cortex-A9, so it **understates any
+guest-CPU-bound work by about that factor**, and its whole-frame timing noise swamps small changes. On
+one 2026-11 port the same binary measured 171-504 ms/frame across runs. The consequences:
+
+- **Do not A/B frame time in an emulator for a change worth a few milliseconds.** You will get an
+  answer, and it will be noise. Two rounds of "the cache made it slower" then "the cache made it
+  faster" on that port were both wrong, and neither was supported by anything.
+- **Instrument the component and time it internally instead.** Wrapping the code under test in
+  `steady_clock` gives a low-noise number and makes the trade explicit arithmetic: on that port,
+  decode 382.9 ms + overhead 177.1 ms with the cache versus 474.3 ms without, per 120 frames. A real
+  ~11% gain on that component, and invisible in frame time because the component was 4 ms of a 130 ms
+  frame.
+- **Bound the component before optimising it.** If the whole vertex path is 4-6 ms of a 130 ms frame,
+  no improvement to it can matter on that platform, however good the ratio looks. Do that arithmetic
+  first, or the work cannot pay.
+- Real-hardware figures from an independent port's own profiling are the only numbers that transfer.
+  Emulator numbers give a shape, not a quantity.
+
 - **Vita3K headless, from a script** *(verified once, 2026-10, Vita3K v0.2.1 on a WSL2 host; the app was a port that stops at a
   text screen, so only boot, loading and that screen were exercised)*: `Vita3K --firmware <PSVUPDAT.PUP>` installs the
   user's own firmware; `Vita3K <app.vpk>` installs and starts the app; `--frontend sdl` gives a plain window that
