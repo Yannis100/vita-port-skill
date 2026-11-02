@@ -510,6 +510,56 @@ libxmp-lite/dr_flac/mpg123) — the proven non-Android audio plumbing on Vita.
 base with clang-21 + lld (VitaSDK only for sysroot/packaging), required `--pic-veneer` for the large
 code, and ships ThinLTO + PGO release builds (see static-recomp.md).
 
+### Console hardware checks still fire on a Vita process (measured, 2026-11)
+
+This is the most expensive bug an emulator/recompilation port can carry, because the check reads as
+obvious dead code and the compiler keeps it.
+
+Console code commonly branches on **physical addresses** that are only meaningful on the original
+hardware: arena bounds, MEM1/MEM2 ranges, `0x80000000`-based pointer validation,
+`OSPhysicalToCached`/`OSCachedToPhysical` round-trips, alignment asserts on `0x8xxxxxxx` pointers.
+A Vita process **relocates** them — the executable, the newlib heap and any mapped blocks live
+outside the guest arena — so the comparison should be false. It is not, because the interesting
+thresholds sit inside the Vita's own address space.
+
+Measured case (Twilight Princess, `mDoMch_Create()` in `m_Do_machine.cpp`):
+
+```cpp
+// retail-only trim: "reclaim the 24 MiB the dev hardware reserved"
+if (arenaHi > 0x81800000 && arenaHi - 0x1800000 > arenaLo)
+    OSSetArenaHi((void*)(arenaHi - 0x1800000));
+```
+
+`arenaHi` was `0x871481a8`, so the branch **fired on every run** and silently removed **24 MiB** of
+guest arena. Effect, same code, measured with it in and out:
+
+| | `arena hi` | `size` | MiB |
+|---|---|---|---|
+| trim live | `0x859481c0` | 41926416 | **40** |
+| trim compiled out | `0x871481a8` | 67092240 | **64** |
+
+The heaps carved from that arena were then sized against a figure the platform never returns. The
+symptom was not a clean OOM: it was an intermittent corrupted allocation size (`0xBF18265F`) about
+one run in seven, which is far harder to attribute.
+
+**Rule:** for any branch that compares a pointer or size against a fixed hardware constant, do not
+reason about it — **measure it**. Log both operands immediately before and after the branch, then
+run the same workload with the block compiled out and diff the numbers. The tell was `0x1800000`
+appearing exactly in the delta. Guard with `#if !TARGET_VITA` (or your platform macro) and record
+the measurement in a comment, or the next merge re-adds it.
+
+Two related notes for emulator/recompilation ports:
+
+- **`-fno-short-enums` is mandatory**, and it splits the build: arm-vita-eabi defaults to short
+  enums, every prebuilt SDK library (newlib, libstdc++, SDL) uses them, and the guest's data
+  structures assume int-sized enums because that is what the console had. Build game/guest code
+  with `-fno-short-enums` and keep the toolchain default for files that include SDK headers. Never
+  let an enum-typed value cross that boundary; use plain integers.
+- **`TARGET_PC`-style macros are usually still defined on the Vita build** (the port sets them so
+  upstream code compiles), so desktop-only arithmetic runs unguarded unless you add the platform
+  guard. A factor described as "×20 to fix desktop allocation failures" is a good place to look
+  first — 20× a console heap cannot exist in a handheld budget.
+
 ## 11. THUG (Tony Hawk's Underground) native recompile
 
 Repo: thug-vita-port — THUG's own C++ recompiled natively for Vita on vitaGL (see

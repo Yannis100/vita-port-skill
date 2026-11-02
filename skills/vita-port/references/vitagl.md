@@ -472,3 +472,8 @@ every texture in the game while reporting a plausible failure.
 - Judge texture state from the output, not from the absence of a crash. Here the tell was measurable
   in the PNG: red pinned at 255 in every row band, no cool tones, and ~3,090-3,980 distinct colours.
   After the fix the same scenes measured 78,360-87,870 distinct colours (about 20-28x).
+- **Independently confirmed** by a second Twilight Princess port on the same pinned vitaGL:
+  [DuskOnVita](https://github.com/NathanKneT/DuskOnVita) reached the same conclusion and simply never
+  calls `glPixelStorei` at all, noting in `platform/vita/gfx_vgl/gpu_api.cpp` that *"vitaGL's unpack
+  API supports row length, not GL_UNPACK_ALIGNMENT"* and that its uploads are already 4-byte aligned.
+  Two ports, two routes, same trap — treat it as a known property of vitaGL, not a local quirk.
