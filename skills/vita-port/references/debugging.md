@@ -345,6 +345,59 @@ python2 main.py core.psp2dmp build/mygame      # the UNSTRIPPED .elf, built with
 - Keep a `*.unstripped.elf` for every release build you ship. The solobop template has a `dump`
   target that pulls and parses dumps.
 
+### Making a silent `abort()` name itself (`--wrap`, no edits to the ported code)
+
+Before reaching for a core dump, check whether the process is *choosing* to die. On a 2026-11 port an
+intermittent `Trace/breakpoint trap` turned out to be an undefined instruction that `addr2line`
+resolved to **`_kill_r`** — newlib's syscall wrapper, i.e. `abort()`. Two sessions were spent calling
+it "an emulator fault" because the faulting address was never resolved. **Always resolve the address
+first**: grep the ELF's section headers to see whether it is even in your image
+(`arm-vita-eabi-readelf -S build/<proj>.velf | grep .text`), then `arm-vita-eabi-addr2line -f -e
+build/<proj>` (the unstripped `add_executable` output, not `.velf`).
+
+Then make the next one explain itself. `abort()` is a strong global in newlib, so the linker can
+redirect every call site without touching the dependency:
+
+```cmake
+add_link_options(-Wl,--wrap=abort -Wl,--wrap=__assert_func -Wl,-Map=${CMAKE_BINARY_DIR}/app.map)
+```
+
+```c
+extern void __real_abort(void) __attribute__((noreturn));
+void __wrap_abort(void) {
+  record("abort from %s at %p", context, __builtin_return_address(0));  /* flush! */
+  __real_abort();
+}
+```
+
+Notes that cost time to learn:
+
+- `__builtin_return_address(0)` is valid here (the wrapper is a real function); **anything above 0 is
+  unsafe** without frame pointers, so log only level 0.
+- **Check whether `assert()` exists at all before wrapping it.** A `Release` CMake build defines
+  `NDEBUG`, so `assert()` compiles to nothing and `__assert_func` is never referenced — proven with
+  `nm -u build/<proj> | grep -c assert` returning **0**. Wrapping it is still correct and free, but do
+  not expect it to fire, and say so rather than reporting "assertions are now captured".
+- To name the address later, emit `-Wl,-Map=` (**often absent by default** — it was here) and convert
+  it into an embedded table with a short script, so the fatal path needs no filesystem read and no
+  allocation. A ~36k-symbol table is ~1.8 MB of `.rodata` and resolves in a linear scan at death.
+- **VitaSDK's newlib has no `SA_SIGINFO`, no `sa_sigaction`, no `siginfo_t::si_addr`.** Use plain
+  `signal(SIGABRT, handler)`; nothing useful is lost for `SIGABRT`.
+- On the emulator, **`/proc/self/maps` does not exist**, so a load base cannot be recorded. It happened
+  not to matter (the image was mapped at its link address, demonstrated by resolving `main` correctly),
+  but do not assume relocation on hardware either.
+- **Prove it with a deliberate abort**, gated behind a file on `ux0:data` rather than an env var — an
+  emulator harness usually does not forward env into the guest but does share the data directory, and
+  the same trigger works on a real Vita. Verified output:
+  ```
+  === abort() from <context> ===
+  abort_caller=0x81009b3d  main
+  ```
+
+Also worth auditing while you are there: the reachable abort sites themselves. On that port all four
+were a bare `abort()` with no message (`PPCHalt`, `OSSwitchStack`, `OSSwitchFiber`, and a config-var
+double-register check), which is why no log ever held a critical line.
+
 ### Logging the crash yourself (kubridge exception handlers)
 
 Core dumps need a round trip through `vita-parse-core`. A kubridge exception handler (kubridge
