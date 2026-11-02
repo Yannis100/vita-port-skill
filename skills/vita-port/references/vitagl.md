@@ -77,7 +77,12 @@ If the API in a port's old code does not exist, grep `source/vitaGL.h` in the vi
   (upstream issue #24). Cubemap mip upload is level 0 only. Depth/stencil is not stored by default
   (`STORE_DEPTH_STENCIL=1` to read it back; costs speed; sample depth with `vglTexImageDepthBuffer`).
 - `glReadPixels` is fast only on exact format matches; otherwise use `vglReadPixels` or
-  `READBACKS_SPEEDHACK`.
+  `READBACKS_SPEEDHACK`. It reads **colour only** (checked in vitaGL's `framebuffers.c`: RGBA/BGRA/RGB/
+  BGR/RG formats; `GL_DEPTH_COMPONENT` raises `GL_INVALID_ENUM` and leaves your buffer untouched, so a
+  value-initialised array silently becomes an all-zero depth image). GLES2 core cannot read depth either.
+  For depth use `vglTexImageDepthBuffer` (needs `STORE_DEPTH_STENCIL=1` in the vitaGL build) and sample it.
+- `gl_FragCoord.xy` is the pixel **centre** (x + 0.5); a LUT lookup `(gl_FragCoord.x + 0.5) * invW` lands
+  on a texel boundary, one column off with NEAREST. Use `gl_FragCoord.x * invW`.
 - All GL calls must come from the thread that called `vglInit*`. `DEBUG_THREAD_SAFENESS=1` reports
   violations.
 
@@ -277,6 +282,11 @@ Real values: bc2_vita newlib 192 MiB + `vglInitWithCustomThreshold(0,960,544,8<<
   assert/measure the cap at generation time (a bringup warning beats a silent `glLinkProgram` failure
   on a `NO_DEBUG` build) and validate with a host linker test over random configs (TP-on-Vita pattern:
   `tests/host/shader/` linked 7,000 random configs, 0 failures).
+- **Integer lanes in a packed uniform blob.** When a WGSL/desktop-GL renderer packs `u32` fields (light-enable
+  masks, bit sets) next to floats and uploads the blob raw, a GLES2 port that reads them as `float` sees
+  denormals (= 0). GLSL ES 1.00 has no `floatBitsToUint`; convert those lanes to numeric floats on upload (exact
+  below 2^24), test bits with `mod(floor(x / 2^n), 2.0)`, and mark such lanes in the generator's segment table so a
+  test can assert none is forgotten. A link-only fuzz cannot catch this (found by a pixel test on the TP port).
 - Translator quirks (verified in `source/shaders/glsl_translator_hdr.h` at `a85cb8d`): the preamble
   `#define`s these identifiers, so **a shader variable or function with one of these names breaks**:
   `s`, `t`, `st`, `ts`, `ss`, `tt` (swizzles), `matrix`, `Matrix`, `sampler`, `vgl`, `mod`, `atan`,
@@ -392,8 +402,73 @@ Real values: bc2_vita newlib 192 MiB + `vglInitWithCustomThreshold(0,960,544,8<<
 | Shader using `textureSize` fails at link | vitaGL handles it only when built with `HAVE_GLSL_TEXTURE_SIZE` (the vdpm package is not: no `glsl_handle_tex_size`); pass the size as a uniform or constant |
 | Slow texture upload/readback | CPU format conversion; use native formats or `vglReadPixels` |
 | Broken mipmaps | NPOT mip chains (issue #24); use POT or generate mips offline |
-| `GL_INVALID_ENUM` spam | unsupported state; usually harmless |
+| `GL_INVALID_ENUM` spam **after any `glPixelStorei` call** | vitaGL implements `glPixelStorei` for `GL_UNPACK_ROW_LENGTH` **only**; every other `pname` (notably `GL_UNPACK_ALIGNMENT` and `GL_PACK_ALIGNMENT`) sets a sticky `vgl_error = GL_INVALID_ENUM` and does nothing. Skip those calls on Vita — RGBA8 rows are already 4-byte aligned. See section 10 |
+| Textures upload "fine" but the scene is flat/untextured, with `GL error` warnings per upload | a sticky error from an earlier unrelated call is being attributed to the upload. Test the enum (below), then bisect the calls with a one-shot checkpoint after each |
+| `GL_INVALID_ENUM` spam (general) | unsupported state. **Not necessarily harmless** — it can be a sticky error raised by an earlier call and reported later. Identify the enum and the originating call before dismissing it |
 | `GL_FIXED` attributes fail | need `HAVE_FIXED_ATTRIBUTES` |
 | Unused attribute locations shift | unused attributes are dropped and remapped |
 | Install error `0x8010113D` | LiveArea PNGs not indexed (not a vitaGL issue) |
 | Link errors on vitaGL symbols | missing `-lstdc++`, `-lmathneon`, `-lvitashark`, `-lSceShaccCgExt`, or wrong order |
+
+## 10. Sticky `vgl_error`: `glPixelStorei` and how a harmless call discards every texture
+
+Measured on the vdpm vitaGL during a 2026-11 port. This one cost a fully-rendered scene its textures
+for two sessions, because the game kept booting and rendering; nothing crashed.
+
+**vitaGL implements `glPixelStorei` for `GL_UNPACK_ROW_LENGTH` (0x0CF2) and nothing else.** Every
+other `pname` — including the GLES2-standard `GL_UNPACK_ALIGNMENT` and `GL_PACK_ALIGNMENT` — falls
+into an `else` that stores `0x500` (`GL_INVALID_ENUM`) into the library's global `vgl_error`, and
+does not change any state:
+
+```asm
+<glPixelStorei>:
+    movw r3, #3314            ; 0xCF2 == GL_UNPACK_ROW_LENGTH
+    cmp  r0, r3
+    itete eq
+    movweq r3, =row_length    ; accepted -> store the value
+    movwne r3, =vgl_error
+    movne.w r2, #1280         ; 0x500 == GL_INVALID_ENUM
+    streq r1, [r3]
+    strne r2, [r3]            ; else -> set a sticky error, change nothing
+    bx   lr
+```
+
+Read it from the archive rather than trusting documentation or the header (the prototype is
+identical on the host, so a host build cannot catch this):
+
+```sh
+arm-vita-eabi-ar x $VITASDK/arm-vita-eabi/lib/libvitaGL.a textures.o
+arm-vita-eabi-objdump -d textures.o | sed -n '/<glPixelStorei>:/,/^$/p'
+```
+
+**Why it is so damaging.** `vgl_error` is **sticky** and is only observed by `glGetError()`. So a
+`glPixelStorei(GL_UNPACK_ALIGNMENT, 4)` immediately before a texture upload makes the *next*
+`glGetError()` return `GL_INVALID_ENUM`, which code naturally attributes to the upload or draw that
+followed. The upload itself succeeded. If the caller treats "any GL error" as "this upload failed"
+and returns an empty handle — a defensive pattern that is correct on desktop drivers — it throws away
+every texture in the game while reporting a plausible failure.
+
+**Rules.**
+- Do not call `glPixelStorei` for alignment on Vita. Uploads are RGBA8, so row length is
+  `width * 4` and already satisfies any 1/2/4/8-byte alignment. If you genuinely need
+  `GL_UNPACK_ROW_LENGTH`, that one is supported.
+- Keep the host behaviour behind the compiler check so the host test harness keeps real semantics:
+  ```cpp
+  #if defined(__vita__)
+  constexpr bool PixelStoreAlignmentSupported = false;
+  #else
+  constexpr bool PixelStoreAlignmentSupported = true;
+  #endif
+  void set_unpack_alignment(int a) noexcept {
+    if (PixelStoreAlignmentSupported) glPixelStorei(GL_UNPACK_ALIGNMENT, a);
+  }
+  ```
+- When logging GL failures, **name the enum and log each distinct `(site, code, size)` once**. A
+  `bool had_gl_error()` throws away the only information that identifies the cause, and per-call
+  logging buries the log under tens of thousands of identical lines (31,786 in the case measured).
+- When a GL error appears right after an upload, bisect by inserting a one-shot `glGetError()`
+  checkpoint after each individual call in the window. That is what located this defect: the error
+  was already queued at `glPixelStorei`, before `glTexImage2D` ran.
+- Judge texture state from the output, not from the absence of a crash. Here the tell was measurable
+  in the PNG: red pinned at 255 in every row band, no cool tones, and ~3,090-3,980 distinct colours.
+  After the fix the same scenes measured 78,360-87,870 distinct colours (about 20-28x).

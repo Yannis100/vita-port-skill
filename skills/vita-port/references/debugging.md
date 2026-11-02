@@ -7,7 +7,7 @@ Start from the symptom table; most Vita problems repeat. Items tagged *(unverifi
 2. Install and bubble errors
 3. Link and build errors
 4. Debugging with hardware
-5. Debugging without hardware
+5. Debugging without hardware (incl. turning a reported fault address into a named defect)
 6. Crash dumps (and logging the crash yourself)
 
 ## 1. Symptom table
@@ -127,18 +127,63 @@ Repo: `LargeVegetable/source-engine` (branch `vita`).
   source+type hash, seconds → few ms per variant) — cross-reference it when a first-use hitch shows
   up in the symptom table.
 
+### Making the first run explain itself *(built and host-tested on a 2026-10 port, and run once in Vita3K, headless; not on a Vita)*
+
+The first hardware or Vita3K run of a big port usually fails before the first frame, and the user sees a
+black or blank screen. Cheap things that turn that into a message:
+
+- **Check the user-supplied inputs yourself, before the engine starts.** If the engine's own fallback (a
+  launcher UI, a file picker) is stubbed out, a missing or bad game image leaves a blank screen forever. Run the
+  engine's own validation function on the file, then show the reason. Keep the decision (disc found / saved path /
+  nothing) in a pure function over plain inputs so every combination is unit-tested on the host.
+- **A text screen needs no GXM or vitaGL**: a `SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW` block (size rounded up to
+  256 KiB), `sceDisplaySetFrameBuf` with `SCE_DISPLAY_PIXELFORMAT_A8B8G8R8` (a little-endian `u32` is
+  `0xAABBGGRR`), a bitmap font, then wait on `sceCtrlPeekBufferPositive`. Wait for the face buttons to be released
+  first, or a button held while launching dismisses the screen at once. Render into ordinary memory and
+  `memcpy` once. Do not free the block while it is on screen; exit the process instead. Keep the font, wrap and
+  layout code free of Vita headers so a host test can render the screens to PPM and you can look at them.
+- **A boot log written before the engine starts**, flushed after every line, with the previous run kept as
+  `.1`: firmware version (`sceKernelGetSystemSwVersion`), free memory (`sceKernelGetFreeMemorySize`), argv, whether
+  `ur0:data/libshacccg.suprx` exists, and each decision. The last line says how far start-up got. Treat a missing
+  shader compiler as a warning, not a stop (Vita3K may not need it).
+- **Know where the engine's own log goes.** SDL3's Vita pref path is `ux0:/data/<org>/<app>/` (strings in
+  `libSDL3.a`), which need not be your port's data folder. Many loggers flush only warnings and above; a crash then
+  loses the last information lines. Set the flush level to Info, and log breadcrumbs: the GL strings, the start
+  of every shader compile, a frame counter for the first frames and then a heartbeat.
+- **Save the source of a shader the translator refuses**, next to its log message, under a label shared by
+  both (a hash of the config). Cap the number of files. The translator's message alone rarely shows what it
+  objected to. Check the file name logic with a host test (path separators in the label must not escape the
+  folder).
+- Read facts from the installed libraries instead of guessing: `strings` on `libvitashark.a` and `libvitaGL.a` show
+  which `libshacccg.suprx` paths they try (`ur0:/data/` and `ur0:data/external/` in the 2026-10 builds).
+
 ## 5. Debugging without hardware
 
 - **Vita3K** (vita3k.org): install firmware (both PUP packages), then `File > Install Archive` or
   `Vita3K <path.vpk>`; CLI options include `-r <TITLEID>`, `-l <0-6>` log level, `-B OpenGL|Vulkan`,
   `-Z <args>`. Logs in `Vita3K.log`. Needs x86-64 with OpenGL or Vulkan.
+- **Vita3K headless, from a script** *(verified once, 2026-10, Vita3K v0.2.1 on a WSL2 host; the app was a port that stops at a
+  text screen, so only boot, loading and that screen were exercised)*: `Vita3K --firmware <PSVUPDAT.PUP>` installs the
+  user's own firmware; `Vita3K <app.vpk>` installs and starts the app; `--frontend sdl` gives a plain window that
+  can be screenshotted (Xvfb, `LIBGL_ALWAYS_SOFTWARE=1`, ImageMagick `import -window root`); `-c <config.yml>` needs
+  `initial-setup: true` and a `pref-path` that already exists (an empty or missing one aborts with "cannot create
+  directories: Invalid argument []"). The official Linux builds can need a newer glibc and Qt6 than an LTS distro
+  has: run them in a rootless container (a current Arch image worked) instead of installing anything on the host.
+  The app's files appear under the pref path (`ux0/data/<app>/`), so a boot log can be read after the run, and
+  `xdotool key x` presses Cross in the default keyboard map. Firmware is not needed for a bare-metal text screen
+  (Vita3K only logs missing kernel modules). Quirks: `sceKernelGetSystemSwVersion` is unimplemented (empty
+  string, success code) and no argv is passed. The firmware and the Vita3K binary are the user's; never ship them.
+- **The host's C library is not the Vita's.** The VitaSDK's newlib has no `%z` length modifier (`%zu` printed
+  `zu` and swallowed the argument); `%ll` works. Every host test uses glibc, which accepts both, so only running
+  on Vita3K showed it. Cast to `unsigned` / `unsigned long long`, and add a grep-level lint for `%z`, `%j`, `%t`,
+  `%hh` in the port's sources (make sure it fails on the bad line before you fix it).
 - Vita3K does not emulate budget limits or kernel permissions, hides some GPU behaviour, and may
   not run plugin-dependent builds (kubridge, `libshacccg.suprx`) *(unverified)*. A Vita3K pass means
   "boots and renders", not "works on a console". `vitaGL` has `HAVE_VITA3K_SUPPORT=1`.
 - Android so-loader ports essentially require hardware.
 - Without any console you can: build, run `check_vpk.py`, run the Linux test target of a
   two-backend project (Halo CE style), and review code for the failure causes above.
-- **Host GLES2 harness for a vitaGL renderer** *(verified on a 2026-10 port; replay never reached hardware)*:
+- **Host GLES2 harness for a vitaGL renderer** *(verified on a 2026-10 port; nothing reached hardware)*:
   Mesa llvmpipe through EGL *surfaceless* gives a headless GLES2 context
   (`eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, ...)`, `EGL_OPENGL_ES2_BIT`, pbuffer or FBO only,
   `libEGL`/`libGLESv2` from `libegl-dev libgles-dev`). Compile the renderer's shader generator and
@@ -154,6 +199,96 @@ Repo: `LargeVegetable/source-engine` (branch `vita`).
   **negative control**: corrupt one byte or one rule on purpose and confirm the test fails. A test that
   cannot fail is not evidence. (4) Run under ASan/UBSan (`-fsanitize=address,undefined
   -fno-sanitize-recover=undefined`).
+- **Host end-to-end render harness** *(verified on the 2026-10 Twilight Princess port: 87 scenes, 14,242 pixel
+  checks, plain and ASan, Mesa llvmpipe, 133 scripted negative controls)*: a link-only shader fuzz does not check pixels, so a renderer can pass it and still draw
+  wrong. Compile the *real* front end (here: GX API -> command processor -> frame -> replay -> FBO -> present) for
+  x86 and render tiny synthetic scenes, each with an analytic expectation (flat colour, barycentric colour, a
+  texel centre, Lambert `N.L`, depth order, blend, cull, alpha test, line width). Lessons:
+  1. It found a bug that the link-only fuzz and a code review both missed: integer bit fields (light masks, a
+     texcoord bit set) travel as raw `u32` in the uniform blob, the shader read them as `float` (a small integer
+     is a denormal = 0), and every light was skipped. GLSL ES 1.00 has no `floatBitsToUint`; convert integer
+     lanes to float on upload and flag them in the segment table, then assert that flag contract on every fuzzed
+     config.
+  2. When a scene fails, check the scene first, then the harness's assumptions, then the code. Of the first
+     failures: one was a scene bug (a GX light with a direction but no position), one a harness assumption
+     (GL row 0 is the bottom, not the top; pin it with an `orientation` scene), one a real renderer bug.
+  3. A scene that passes on the first try is unproven. Break the code under test on purpose (comment out the
+     fix) and confirm exactly the scenes that depend on it fail. Make sure the break reaches the build: a host
+     Makefile without header dependencies (`-MMD -MP`) silently ignored an edited header and the control
+     "passed" for the wrong reason. Pick probes that the break can change: a mirror bug cannot fail a symmetric
+     glyph ('T'), nor a red/blue swap a blend of blue over red; use 'L' and green over red.
+  4. Clear colour is captured at `begin_frame` in Aurora-style frame recorders, so the first frame after init
+     shows the previous colour; render a warm-up frame. Scenes share GPU/API state: reset line width, point size
+     and other sticky state in the baseline.
+  5. Say what a pass cannot show. Mesa accepts GLSL that vitaGL's Cg translator rejects, has no uniform caps, and
+     has `highp` everywhere; row order, `gl_FragCoord` and texture-unit assumptions still need hardware.
+  6. **Run the whole harness under ASan** (`-fsanitize=address`, `detect_leaks=0`) as its own mode, not just the
+     unit tests: it found a per-texture-unit state array one entry too small for the unit used by a fog-range
+     table, and a use-after-free at exit.
+  7. **Hooks that are declared but never called.** Grep for callers of every `init`/`shutdown`/`prepare` function a
+     renderer defines. Here a texture "prepare for sampling" step (the GPU palette pass) and the texture and GX
+     `shutdown` functions had no caller, so palette textures sampled empty data and GL-handle caches were
+     destroyed after the context. Caches of GL handles that live in statics need an explicit teardown before the
+     context goes, and a teardown check in the harness (live texture bytes return to zero).
+  8. **Per-frame storage must not outlive the frame.** A cached offset into a frame's upload buffer (an array
+     "cached range") survived into the next frame and pointed at the previous frame's data: reset per-frame
+     caches in `begin_frame`.
+  9. **State caches in the front end** (a viewport or scissor that is only re-emitted when it changes) mean that
+     leaving an offscreen pass must explicitly restore both, and that a stale one leaks into whichever scene runs
+     next. Targets cached per size leak the same way: analyse "extra" failures in a negative control before
+     adjusting the expectation, they are often true.
+  10. **Clamp-to-edge hides small targets.** A copy larger than its source repeats the source's edge texels, so a
+     render target that is too small looks right behind uniform edges. Give the last rows and columns their own
+     colours. A fresh GL texture is zero-filled on Mesa, so "a new target is cleared" can only be proven on re-use.
+  11. A negative control must fail **exactly** the scenes it is meant to: run each against the whole suite and
+     compare the failing set (a script with an expected list per control). "Fails something" is not enough; a
+     control that fails nothing never reached the build.
+  12. Before writing a scene for a code path, check that the game build reaches it (here a destination-alpha clear
+     function was stubbed out under the PC target, so it needed no scene) and that nothing was claimed "live"
+     from a function name alone.
+  13. In GLSL ES 1.00 `gl_FragCoord` is `mediump` by definition, but Mesa computes it in fp32, so a host test cannot
+     see the precision loss that depth-based maths (perspective fog divides by `B - z`) may have on the GPU. Pin the
+     formula on the host, and treat `gl_FragCoord.z` precision as hardware-unverified.
+
+### Turning a reported fault address into a named defect (static, no console needed)
+
+A crash report often survives only as a symbolised line ("`Foo::bar` +838") or as a raw guest address. You usually
+do not need to reproduce it: the unstripped ELF still contains the defect. This route found a real null dereference
+in a 2026-11 port after a previous session had recorded the wrong addresses and given up.
+
+1. **Re-symbolise the address against the ELF you are actually running.** Never trust a recorded address.
+   `arm-vita-eabi-addr2line -f -C -e build/<proj> 0x...`, then check it against the symbols:
+   `arm-vita-eabi-nm -C -S --defined-only build/<proj> | grep '<function>'`. The `-S` size matters: an offset
+   larger than the function's size is not in that function. In that port `makeHierarchy`+432 was past the end of a
+   `0x1e6`-byte function and resolved to a completely different symbol.
+2. **Check the arithmetic and check that it is code.** `0x810e4cb0 + 838` is `0x810e4ff6`, not `0x810e506e`.
+   The recorded value happened to fall inside a literal pool (`.word 0x8240c400`), i.e. data, so it could never
+   have been a faulting instruction. `objdump` the surrounding bytes before believing any offset.
+3. **Disassemble the whole function, not just the reported instruction.** A symbolised "invalid read" is often a
+   compiler-folded consequence, not the source line you expect:
+   ```
+   arm-vita-eabi-objdump -d -C --start-address=<fn> --stop-address=<fn+size> build/<proj>
+   ```
+4. **Recognise the constant-offset-through-a-null pattern.** `movs r0, #0` followed by `ldr r0, [r0, #N]` is a
+   literal dereference of address `N`. It is not a corrupted pointer at run time: it is the compiler proving a
+   pointer is NULL and still emitting the access. Find `N` in the class's member list (`/* 0x58 */ J3DMaterial* mMesh;`)
+   to name the field, then search the source for the member access.
+5. **Check whether the "null test" actually reads the pointer.** The root cause in that port was an accessor that
+   returns a constant and never reads `this`:
+   ```cpp
+   u32 getType() const { return 'NJNT'; }                 // never dereferences
+   ... else if (pJoint->getType() == 'NJNT') {            // "null check" that always passes
+           J3DMaterial* m = pJoint->getMesh();            // folds to ldr r0, [r0, #0x58]
+   ```
+   Any method of that shape is not a null check. Test `p != NULL` explicitly.
+6. **Distinguish inherited from introduced before you "fix" upstream code.** Compare against the reference
+   decomp or the pristine dependency: here `git diff HEAD -- <file>` was empty and the reference tree had
+   identical code, so the bug was inherited and the fix belongs in a documented local patch.
+7. **Verify the fix in the codegen, not just the source.** Rebuild, then re-disassemble and confirm the
+   `movs r0, #0` / `ldr r0, [r0, #N]` pair is gone and every access to that field now goes through a live register.
+   A grep of the source cannot prove the optimiser stopped folding.
+8. **Say what the fix does not prove.** The original log had lost the faulting instruction, so the honest claim is
+   "the one reachable null dereference in this area is closed", not "the reported crash is explained". Record both.
 
 ## 6. Crash dumps
 

@@ -431,6 +431,17 @@ isn't there:
   relinking without the trailing `SceGxm_stub` is what broke (link order). A wrong rationale gets copied
   into docs and future builds. Before keeping or repeating a cause, remove the fix and see if the
   symptom returns.
+- **A relayed "done and verified" report needs a contract check, not a re-run of its own tests.** One
+  report (TP-on-Vita) listed three finished items; all three were wrong in ways its tests could not see:
+  (1) an optimization labelled "provably exact" (upload one matrix bank when the vertex format has no
+  matrix index) relied on a generator-level fallback, but the runtime always supplies that attribute from
+  the draw's `GXSetCurrentMtx` value, which the game sets to non-zero; (2) a lookup table whose values are
+  always >= 1 was clamped to [0,1] in 8 bits, so every entry became 1.0 (feature silently off, link and
+  tests still green); (3) the "fix" called `glReadPixels(GL_DEPTH_COMPONENT)`, which vitaGL and GLES2
+  reject. What caught them: reading the producer of the data (value range of the table), the consumer's
+  contract (what the decoder is guaranteed to emit), and the library source for the API in question; then
+  a test that exercises the real data range through the real shader on a host GL, plus a negative control
+  that reproduces the old bug. Make an unsafe shortcut opt-in (safe default argument) and key caches on it.
 - **Trace the no-arguments boot path.** An app that boots only from a CLI flag or a saved setting
   (`--dvd`, a ROM path) hangs on a blank screen on a console, where nothing passes arguments and the
   desktop UI that would ask is stubbed out. Read `main` down to the first frame with empty argv and an
