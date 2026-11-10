@@ -116,6 +116,22 @@
         "Tells the user that end users need libshacccg.suprx in ur0:data",
         "States which parts are unverified on hardware"
       ]
+    },
+    {
+      "id": 7,
+      "name": "draw-batching-measurement",
+      "prompt": "My PS Vita port runs at about 4 fps in the emulator with roughly 440 draw calls per frame. I keep reading that draw-call batching is the big win for Vita. How much would batching actually save me, and should I rewrite my renderer's vertex path to merge draws?",
+      "expected_output": "A measured answer rather than an opinion: states the full legality condition for merging two draws (same program, same sampler bindings, same uniform CONTENT, contiguous vertices) BEFORE aggregating, measures how many adjacent draws actually satisfy all of it, and reports the real saving with its conditions. Must decline to recommend the rewrite if the measured saving is small, and must be explicit that the emulator cannot resolve timing wins.",
+      "files": [],
+      "expectations": [
+        "Names the complete merge condition up front, including per-draw UNIFORMS, rather than stopping at pipeline state or texture bindings",
+        "Does not present a pipeline-only or state-only group count as the achievable reduction",
+        "Compares uniform CONTENT (bytes) rather than uniform offsets or pointers, or explains why a per-item field does not block a merge",
+        "Asks for or proposes a measurement on real steady-state frames, and rejects sampling a loading frame or a frame threshold that fires too early",
+        "States that emulator timing cannot resolve a 1-2 ms change and that a timing win here is unproven without hardware",
+        "If the measured saving turns out small, recommends NOT doing the rewrite and gives the cost/benefit, instead of proceeding because 'batching is good practice'",
+        "Notes that a merge must preserve draw ORDER where blending or depth make order observable"
+      ]
     }
   ]
 }

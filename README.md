@@ -27,6 +27,10 @@ npx skills add yannis100/vita-port-skill
 - Input mapping (dual sticks, touch, gyro, PS TV pads)
 - LiveArea packaging and VPK validation
 - Debugging crashes (Vita3K, vitacompanion, vita-parse-core)
+- Profiling and measuring performance claims: what an emulator can and cannot resolve, how to
+  instrument without fooling yourself, how to read a screenshot numerically
+- Automating the build → deploy → see → measure → fix loop on a real console (vita-agent-use,
+  psp2-tooling, vitacompanion fallback)
 
 ## Install
 
@@ -59,8 +63,8 @@ Use the vita-port skill. <your request>
 
 - `skills/vita-port/SKILL.md` — game porting workflow (triage → toolchain → skeleton → dependencies →
   platform layer → graphics → package → test → hand-off)
-- `skills/vita-port/references/` — 9 reference docs: toolchain, runtime, vitagl, port-types,
-  api-emulation, so-loader, static-recomp, java-teavm, debugging
+- `skills/vita-port/references/` — 11 reference docs: toolchain, runtime, vitagl, port-types,
+  api-emulation, so-loader, static-recomp, java-teavm, debugging, agent-loop, measurement
 - `skills/vita-port/scripts/` — audit_source.py, check_env.sh, check_vpk.py, make_placeholder_assets.py
 - `skills/vita-port/assets/` — CMakeLists.vita.txt, template.xml, vita_runtime.c
 - `skills/vita-port/evals/` — evaluation scenarios

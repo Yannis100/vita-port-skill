@@ -64,6 +64,22 @@ unsafe builds). Unsafe apps need "unsafe homebrew" enabled in HENkaku settings.
 
 ## 4. Debugging with hardware
 
+Two tools give an agent or a developer far more than FTP, and both are **firmware 3.65 only** — see
+`references/agent-loop.md` for setup, safety model and operating rules:
+
+- **vita-agent-use** (shoui520, GPL-3.0): agent-grade control of the console — screenshots, precisely
+  timed buttons/sticks/multi-touch, VPK deploy, launch/close, and crash/log/metric events **pushed** to
+  the PC instead of polled. Squashes the deploy→look→fix loop to seconds of agent time. Requires
+  VitaShell, Python 3 + `cryptography`, Mbed TLS 3.6.7 to build the plugin.
+- **psp2-tooling** (Grarak, GPL-3.0): profiles and a debugger. Per-core CPU profiles with call stacks
+  (DTrace + DWARF CFI), whole-system `psp2prof`, GPU Razor live metrics and `.sgx` frame captures,
+  hardware breakpoints/watchpoints, and `pdump` core dumps with backtraces — over the Vita's USB port,
+  no FTP or network. Needs a DevKit, or a retail Vita running its `retail-cp/`, plus decrypted DevKit
+  `os0:kd` modules the user must obtain (the `365-TOOL` branch of LiEnby/psvita-elfs has them; **do not
+  redistribute Sony modules**). Patches 3.65 kernel offsets, so other firmware will most likely fail.
+  Read its `AGENTS.md` first: the stack-size limits, the one-owner rule and the power-off rule are all
+  there because breaking them freezes or burns the console.
+
 - **vitacompanion** (github.com/devnoname120/vitacompanion): FTP on **1337**, command server on **1338**.
   Install `vitacompanion.suprx` (`*main`) and `vitacompanion_kernel.skprx` (`*KERNEL`) under
   `ur0:/tai/config.txt`. Upload: `curl -T game.vpk ftp://VITA_IP:1337/ux0:/data/game.vpk`. Control:
@@ -378,9 +394,28 @@ Notes that cost time to learn:
   `NDEBUG`, so `assert()` compiles to nothing and `__assert_func` is never referenced — proven with
   `nm -u build/<proj> | grep -c assert` returning **0**. Wrapping it is still correct and free, but do
   not expect it to fire, and say so rather than reporting "assertions are now captured".
-- To name the address later, emit `-Wl,-Map=` (**often absent by default** — it was here) and convert
-  it into an embedded table with a short script, so the fatal path needs no filesystem read and no
-  allocation. A ~36k-symbol table is ~1.8 MB of `.rodata` and resolves in a linear scan at death.
+- **Naming the address is where this went wrong twice, so do it in this order:**
+  1. **Use `nm -S -C --defined-only <elf>`, not the linker `-Map`.** The map has no size column and its
+     demangled names contain spaces, so a naive parser silently drops them — on that port **43.8% of
+     symbols**, including every templated function and every function with arguments. The map is
+     attractive because the build already makes one; it is still the wrong input.
+  2. **Ship the table as a file in the VPK, not as a compiled-in blob.** A complete text-symbol table
+     for a mid-size game is **~4–5 MB** against a few hundred KiB of `.rodata` slack before the data
+     segment (see `check_text_gap.py`), so an embedded table has to be cut down, and the cut is silent.
+     A file costs nothing unless the process dies.
+  3. **Make the table say whether it is trustworthy.** Record a known symbol's address in the table and
+     compare it with that symbol's live address. Only name addresses when they agree. A wrong name is
+     worse than no name: theirs reported a 0x10-byte atomic-load getter for an address inside a
+     different function, sending the reader to innocent code.
+  4. **Check it on every boot, not only at death.** A check that can only run after a crash can never be
+     validated. Running it at startup immediately exposed a real defect in theirs: the ARM **Thumb bit**
+     — a function pointer has bit 0 set, an ELF symbol value has it clear — so a *correct* table
+     reported `MISMATCH ... table 0x8108f570 vs live 0x8108f571`. Clear bit 0 on both sides before
+     comparing.
+  5. **Test the resolver on the host against the real generated table**, reading expected addresses out
+     of the table rather than hardcoding them (hardcoded addresses test the build). Assert the two
+     failures above specifically: a C++ name with spaces and commas resolves, and an address past a
+     short symbol does not resolve to that symbol.
 - **VitaSDK's newlib has no `SA_SIGINFO`, no `sa_sigaction`, no `siginfo_t::si_addr`.** Use plain
   `signal(SIGABRT, handler)`; nothing useful is lost for `SIGABRT`.
 - On the emulator, **`/proc/self/maps` does not exist**, so a load base cannot be recorded. It happened
@@ -388,10 +423,13 @@ Notes that cost time to learn:
   but do not assume relocation on hardware either.
 - **Prove it with a deliberate abort**, gated behind a file on `ux0:data` rather than an env var — an
   emulator harness usually does not forward env into the guest but does share the data directory, and
-  the same trigger works on a real Vita. Verified output:
+  the same trigger works on a real Vita. Have the trigger delete itself so the next launch survives, and
+  **verify the name it reports is true** by checking the address against `nm`'s symbol extent. Verified
+  output:
   ```
   === abort() from <context> ===
-  abort_caller=0x81009b3d  main
+  abort_caller=0x81009bab  main
+  symbols: table matches this build
   ```
 
 Also worth auditing while you are there: the reachable abort sites themselves. On that port all four

@@ -1,6 +1,6 @@
 ---
 name: vita-port
-description: Port games and game engines to the Sony PS Vita (PSVita / PS TV) as VPK homebrew using VitaSDK, vdpm, vitaGL, SDL2 and GXM. Use this whenever the user mentions PS Vita, PSVita, Vita homebrew, VPK, VitaSDK, vitaGL, HENkaku, Vita3K, ux0:data, or asks to "port X to Vita" or get a game or engine running on a Cortex-A9 ARM handheld, even if they do not name the tools. Covers feasibility triage, CMake and toolchain setup, heap/stack/memory budget, OpenGL to vitaGL, input mapping, LiveArea packaging, debugging crashes, and release conventions.
+description: Port games and game engines to the Sony PS Vita (PSVita / PS TV) as VPK homebrew using VitaSDK, vdpm, vitaGL, SDL2 and GXM. Use this whenever the user mentions PS Vita, PSVita, Vita homebrew, VPK, VitaSDK, vitaGL, HENkaku, Vita3K, ux0:data, or asks to "port X to Vita" or get a game or engine running on a Cortex-A9 ARM handheld, even if they do not name the tools. Covers feasibility triage, CMake and toolchain setup, heap/stack/memory budget, OpenGL to vitaGL, input mapping, LiveArea packaging, debugging crashes, profiling and measuring performance claims, automating a build/deploy/screenshot loop on a real console (vita-agent-use, psp2-tooling, vitacompanion), and release conventions.
 ---
 
 # Porting a game to the PS Vita
@@ -28,6 +28,10 @@ workflow below front-loads the checks that catch those early.
 - **Say what you did not verify.** You can usually build a VPK here, but you cannot run it on
   hardware. Items tagged *(unverified)* in the references need an on-device test. Tell the user
   which claims in your report are build-verified and which are untested on a Vita.
+- **Measure before you claim, and state the condition in full.** An aggregate of a criterion you
+  have not fully written down is fiction, and a screenshot filename is an expectation, not evidence.
+  `references/measurement.md` has the six ways this went wrong on a real port, plus what an emulator
+  can and cannot resolve. Read it before optimising or before writing a performance claim.
 
 ## Workflow
 
@@ -75,6 +79,14 @@ It flags code that does not map to the Vita (fork, mmap, dlopen, x86 intrinsics,
 | Android NDK game (`ANativeActivity_onCreate` present) | so-loader boilerplate with `NDK_PORT=ON`, FalsoNDK submodule; see references/so-loader.md section 2 |
 | Game written for a runner (Lua, GameMaker, Godot 3) | port or reuse the runner, not the game |
 | Java / libGDX game (GL 2.0 class) | ahead-of-time translation: TeaVM C backend (Vita precedent) or Clearwing VM (real threads, GPL); compare them in the plan; see `references/java-teavm.md` |
+
+**Set expectations about "port any game".** Community guides circulate claims that any game can be
+ported with the right tooling. Tooling is not the limit; the console is. A port is feasible when the
+code maps to a 32-bit ARM CPU with no 64-bit assumptions, a fixed 960x544 framebuffer, ~256 MiB (365
+with `ATTRIBUTE2=12`), no compute or tessellation, and no JIT that only emits x86. Modern renderer
+features, large working sets, and 64-bit-only engines are architectural mismatches, not packaging
+problems — no amount of automation changes that. Say which category the user's game falls into early,
+and prefer "this needs a reimplementation of X" over an open-ended effort estimate.
 
 Decline or scope down, and say why, when the game needs: GL 3.3+ core / geometry / compute shaders,
 64-bit-only code, a JIT that only emits x86 (ARM JITs work; `references/runtime.md` section 4b), Unity IL2CPP, Java whose core needs what TeaVM and vitaGL lack (runtime
@@ -169,12 +181,27 @@ python3 ~/.claude/skills/vita-port/scripts/check_vpk.py build/<name>.vpk
 header, and LiveArea file presence, sizes and indexed-colour PNG type. These are the causes of most
 "installs but bubble is missing" and `0x8010113D` errors.
 
-### 8. Test and debug
+### 8. Test, debug and measure
 
 Vita3K can run a VPK for a first look, but it hides memory-budget and permission problems and does
-not run plugin-dependent builds, so a Vita3K pass is not proof. On hardware use vitacompanion
-(FTP 1337, commands 1338) and `vita-parse-core` on the unstripped ELF. Symptoms and fixes are in
-`references/debugging.md`.
+not run plugin-dependent builds, so a Vita3K pass is not proof. It also **cannot resolve a 1-2 ms
+timing change** — its noise is far larger — so use it for structure (pixel assertions, draw counts,
+state transitions) and take time to hardware.
+
+On hardware, the loop is: deploy → launch → **see the screen** → read logs → measure → fix. Two
+community tools make that loop tight, and both are **firmware 3.65 only**:
+
+- **`vita-agent-use`** gives an agent screenshots, timed button/stick/touch input, VPK deploy, launched
+  apps and pushed crash/log events — so the agent can drive the game to a screen, look at it, and
+  iterate without a human touching the console.
+- **`psp2-tooling`** gives real profiling and debugger access: per-core CPU profiles with call stacks,
+  GPU Razor metrics and frame captures, hardware breakpoints, and core dumps on demand. It needs Sony
+  DevKit `os0:kd` modules the user must obtain themselves (never redistribute them).
+
+Both are optional. Without them, use vitacompanion (FTP 1337, commands 1338) plus a log file and a
+heartbeat the app writes itself. `references/agent-loop.md` covers the setup, the safety model, the
+operating rules that freeze a console if skipped, and the fallback; `references/measurement.md`
+covers turning what you see into a number you can trust.
 
 **Vita3K caveat (community report):** some ports do not run under Vita3K at all (e.g. the gunbro port), even
 when there are no Vita3K/PSV gaps for the game. A Vita3K pass is a convenience, never proof. For games that
@@ -199,6 +226,8 @@ LGPL-3.0. Use a unique 9-character title ID of the form `XXXXYYYYY`.
 | `references/api-emulation.md` | cross-platform API emulation (libctru on Vita, TEV→GLSL, software DSP) |
 | `references/java-teavm.md` | the game is Java / libGDX: TeaVM C backend, classlib gaps, runtime patches, memory split, local-build legal model |
 | `references/debugging.md` | install errors, boot crashes, black screens, link errors, crash dumps, tools |
+| `references/agent-loop.md` | automating the build→deploy→see→measure→fix loop on a real console (vita-agent-use, psp2-tooling, vitacompanion fallback) |
+| `references/measurement.md` | before optimising or claiming a gain: what an emulator can resolve, how to instrument, how to read a screenshot numerically, how to report what you measured |
 
 ## Final report checklist
 
