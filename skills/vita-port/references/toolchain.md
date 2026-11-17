@@ -186,6 +186,69 @@ Repo: thug-vita-port (`vita/CMakeLists.txt`, `vita/engine.cmake`).
   re-include anything under `/Vita/`) beats a whitelist — upstream files enter automatically
   (evidence: `vita/engine.cmake`).
 
+### 3c. Code layout and PGO: two build-level levers that need no source change (2026-11-16)
+
+Both are cheap, both are orthogonal to the renderer, and both are measurable with an emulator. Neither
+is a micro-optimisation guess: they change where code *goes*, not what it computes.
+
+**Hot-code ordering.** On ARM a call more than ~16 MB away cannot be encoded as a direct branch, so the
+linker inserts a **long-branch veneer** (an extra branch through a stub) at every such call site. A
+large Vita binary easily separates its hot code from a cold static library by more than that, putting a
+trampoline on the paths that run most. Fixing it is a link-order change:
+
+1. Build with `-ffunction-sections`, so each function gets its own `.text.<mangled>` input section.
+2. Collect a CPU profile and map its PCs to symbols with `arm-vita-eabi-nm -n -S --defined-only`.
+3. Emit the sampled functions hottest first and link so the linker honours that order.
+
+`scripts/vita_hot_order.py` does steps 2-3: it takes `<profile>:<elf>` pairs and writes a
+linker-script fragment. Several profiles may be given; each is normalised so a long run cannot outvote
+a short one.
+
+**Which flag works is linker-specific, and the two are not interchangeable** (measured on VitaSDK
+2026.08, GNU ld 2.46.1):
+
+| Flag | Result |
+|---|---|
+| `-Wl,--section-ordering-file=<fragment>` | **Does not work for this.** GNU ld orders *output* sections and requires each to pre-exist (`output section '.text.x' must already exist`); `SECTIONS { }` and bare globs are syntax errors. LLD accepts this flag with a different, bare-name format -- do not assume one from the other. |
+| `-Wl,-T,<fragment>` | **Works.** The fragment is merged after the default script; a test linked to the requested order at offsets 0/4/8, with `.rodata`/`.data`/`.bss` still present (36 sections). |
+| `-Wl,--sort-section,name` | Reorders, but **alphabetically** -- not heat order. |
+
+Verifying it took effect is two `nm` calls: link once without the fragment and once with it, and compare
+the address order of the sampled functions. Do not trust the presence of the flag.
+
+**Order at FUNCTION granularity, never at archive granularity.** `*libc.a:*(.text .text.*)` reads like
+"put libc first" and behaves like "relocate 4,921 functions", because libc is mostly stdio, locale, time
+and filesystem bulk. Measured on a 18.55 MiB `.text`: that fragment moved 4,921 functions into
+`.text.hotlibs`, left `memcpy`/`malloc` exactly where they were (~18.4 MiB out), and **raised** the hot
+veneer count from 58 to 90 while lowering the total from 316 to 310. The total is the wrong metric.
+Order the specific functions you have a profile for, and afterwards check those symbols' addresses --
+not the section addresses, and not that the flag was accepted.
+
+**But also check whether the win is worth having before doing any of this.** Count the veneers whose
+target is actually hot: on the port above, 258 of 316 were cold C++ runtime and only 58 were libc/libgcc/
+`operator new`. A veneer is one extra branch through a stub, so a few dozen on hot paths is small, and an
+emulator cannot resolve it -- the same rule as everywhere else in this skill.
+
+**`-T` caveat, check on your own build.** A `-T` fragment can disturb the default script's segment and
+entry-point handling. On a bare test link the entry point came out `0x0` where the default script would
+have set it. Confirm the entry point and that the SELF/VPK still boot before shipping; if they do not,
+define the full output sections in the fragment rather than only `.text`.
+
+**PGO.** Build an instrumented VPK, run it, then rebuild with the resulting `.gcda`. GCC places functions
+its own profile marked hot into `.text.hot.<name>` and orders them by heat, so it reinforces the
+ordering above rather than duplicating it -- the generator already emits `*(.text.hot.<name>)`
+alongside `*(.text.<name>)`. For an interprocedural variant use `-fprofile-use` with
+`-fprofile-partial-training` when the training run cannot cover every path (it stops GCC from marking
+uncovered code cold).
+
+Reference implementation with published numbers: `HenryKun55/celosia` ships `tools/vita_hot_order.py`
+plus `game/pgo/vita-pgo.tar.xz` (prebuilt Vita PGO data), toggles the ordering with
+`-D..._FUNCTION_SECTIONS=OFF` so the A/B stays available, and writes the order file from profiles
+with the hottest functions first. Their hot set was reported at roughly 11 MB, i.e. inside branch range.
+
+Neither lever has been measured on the port this note was written from; treat the mechanism as verified
+and the gain as unquantified until you measure it.
+
 ## 4. Makefile / manual packaging chain
 
 Pipeline used by Makefile ports and by projects with their own build system:

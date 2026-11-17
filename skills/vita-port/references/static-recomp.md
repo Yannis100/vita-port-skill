@@ -25,6 +25,7 @@ machine code, not a target platform's documentable API.
 | VitaKart64 / sm64ds-remastered-vita | Mario Kart 64 / SM64DS | Decompilation runtimes | Playable |
 | MH3rd-HD | Monster Hunter 3rd HD | Recompiled | 60 fps |
 | Monster Hunter Tri (Wii) | PowerPC (`sys/main.dol`, relocatables) | Static recomp: C#/.NET8 translator (`recomp.yml`), GX replaced by native C producers + frame-packet render thread, offline psp2cgc shader bank, clang-21+lld toolchain | Full shipping engine port (VPK + launcher), active 2026-10 |
+| Shadow of the Colossus | PS2 (boot ELF + 3 XFF modules) | PS2Recomp lift + **runtime module capture**; native Metal/GLES renderer; VitaGL on Vita; hand-decompilation proven against the recompiled code | Builds and runs on Vita (18-25 fps in Vita3K's intro), GPL-3.0, active 2026-11 |
 
 ## Technique Details
 
@@ -104,6 +105,33 @@ documents transferable discipline for any console→Vita recomp:
 - A/B against a reference emulator run for divergence, with honest device numbers — the kit's own
   published floor is ~30 fps indoors / 17-21 fps outdoors on a PSP-3000 at 333 MHz.
 
+### PS2 with runtime-linked modules: capture, don't guess (Celosia)
+
+`HenryKun55/celosia` (Shadow of the Colossus, GPL-3.0) solves a problem that stops most PS2 lifts and
+generalises to any game that links code at run time. SotC ships a small boot ELF and loads
+`KERNEL.XFF`, `MANAGER.XFF` and `GAMECORE.XFF` as **relocatable modules that the game's own dynamic
+linker maps**. A static recompiler needs every function up front, so it cannot be handed the ELF alone.
+
+Their pipeline, which is the reusable part:
+
+1. Recompile the boot ELF; recover function boundaries with a tool, take symbol names from the
+   modules' *imports*, since the ELF itself is small.
+2. Run the game until it jumps into code that is not recompiled yet -- that fault is the next
+   module's entry point. **Dump guest RAM at that moment.** The loaded module is in the dump at its
+   final addresses with its symbols resolved; locate the module header and cut it out.
+3. Merge the ELF and the captured modules into one linkable unit, with a function map and the list of
+   instructions the guest linker rewrites. Repeat 2-3 for each module.
+4. Record every VU1 microcode image the game uploads with a scripted run, and compile each to C.
+
+The transferable rule: **a fault on an un-lifted entry point is a measurement, not a crash.** Dump
+state there and keep going rather than trying to statically predict what the guest linker will map.
+Their `PS2X_DUMP_RAM_ON_MISSING` / `PS2X_DUMP_RAM_AT_SECONDS` switches are the mechanism.
+
+Also worth copying: they measure progress as **share of guest calls landing in native code (48 %)** and
+**share of the game thread's instructions run natively (43 %)**, not as "functions decompiled", because
+the recompiled share is spread thin (their largest function is 1.5 % of it). Percentages of function
+counts flatter a port; time and call shares do not.
+
 ## When to Use
 
 Use static recompilation when:
@@ -120,6 +148,7 @@ Use static recompilation when:
 - Binding of Isaac recomp (repentogxm): https://github.com/0xl0cal/repentogxm
 - GT2-Vita: https://github.com/limeking614-dev/GT2-Vita
 - TimeSplitters: https://github.com/ValdiaKun/TimeSplitters
+- Celosia (Shadow of the Colossus, PS2 -> macOS/Vita): https://github.com/HenryKun55/celosia
 - AstraRecomp: https://github.com/mirou1611/AstraRecomp
 - vitarecomp: https://github.com/sp00nznet/vitarecomp
 - Xita (Xbox): https://github.com/Xita-Project/xita
