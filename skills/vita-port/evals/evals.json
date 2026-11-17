@@ -151,6 +151,22 @@
         "Notes that pinning is not a win by itself, that nothing is pinned unless it is pinned, and that a census can only be a registry (SceKernelThreadInfo is declared but never defined; no thread-enumeration API exists; kubridge exposes no affinity call)",
         "States that host or emulator timing does not transfer to hardware (the software rasteriser's own worker threads change the contention), and does not promise 60 fps"
       ]
+    },
+    {
+      "id": 9,
+      "name": "console-side-switches",
+      "prompt": "I built an optimisation for my Vita port behind TPV_ENABLE_DECODE_WORKER and it works in Vita3K -- I can see the second thread in the log and the frame gets faster. I'm about to put it on the console. Is there anything I should check first?",
+      "expected_output": "Identifies that a getenv switch cannot be set on a Vita because there is no shell, so the feature is unreachable on hardware unless a file-based switch also exists; requires an enable file AND a disable file so either A/B arm can be forced; specifies the precedence order with the disable side first; requires the OFF spellings to be enumerated and unit-tested off-device because the failure is silent. Also flags that the worker's buffers come out of the port's own heap budget, which an emulator does not model, so the size should be a build-time override and the footprint logged as a lifetime peak.",
+      "files": [],
+      "expectations": [
+        "States that a Vita has no shell, so getenv() can never be set there, and that a feature gated on an env var alone therefore never runs on hardware no matter what the emulator shows",
+        "Requires BOTH an enable marker file and a disable marker file under ux0:data/<app>/, explaining that the default (on or off) decides which direction needs a file and that without both, one of the two A/B arms is unreachable",
+        "Specifies that the disable side is checked FIRST on every channel (disable-file, disable-env, enable-env, enable-file), because a control arm that cannot be forced OFF silently contains the feature under test",
+        "Requires the OFF spellings to be enumerated and compared as whole words (0, no, off, false, disable, disabled, empty), noting that a first-character test treats 'off' as ON, and requires this logic to be unit-tested in a host suite because the failure produces no error and no log line",
+        "Notes that per-worker buffers are allocated inside the port's own heap budget, where failure is a hard abort and an emulator will not reproduce it, and asks for a build-time size override so the first console run can use a smaller value",
+        "Asks for the footprint to be logged as a lifetime peak rather than a per-window value, because after warm-up nothing grows and a per-window number reads zero in exactly the steady scene that matters",
+        "Does not accept the emulator result as evidence about the console, and keeps the physical conclusion (does the second thread win on this hardware) deferred to a hardware run"
+      ]
     }
   ]
 }

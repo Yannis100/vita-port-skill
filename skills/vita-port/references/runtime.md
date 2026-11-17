@@ -388,6 +388,37 @@ That one file is what lets a single console session produce a pinned run and an 
 same build, which is the only way to measure whether a layout helps. KOTOR II ships the same idea as
 `THREAD_PINNING`; see 5b.
 
+**This rule applies to EVERY optimised path you gate, and getting it wrong is silent.** Measured on a
+2026-11 project: a decode worker was gated on `getenv("TPV_ENABLE_DECODE_WORKER") != nullptr` with a
+`ux0:data/<app>/no_decode_worker` file beside it that could only turn it OFF. The env var is
+unsettable on a Vita, so the feature was **unreachable on hardware** while the design docs described it
+as "behind a flag", and the console A/B it existed to settle could not be run. Nothing failed: no
+compile error, no log line, no emulator symptom, because the emulator harness sets the env var.
+
+Three rules follow, and each has cost a session:
+
+1. **Ship an enable FILE and a disable FILE for anything you intend to A/B on a console.** If the
+   default is off, only an enable file lets a console turn it on; if the default is on, only a disable
+   file lets a console run the control arm. Both are needed.
+2. **Check the disable side FIRST on every channel** (disable-file, disable-env, enable-env,
+   enable-file). An arm that cannot be forced OFF is worse than one that cannot be forced ON, because
+   the "control" run then silently contains the feature under test.
+3. **Enumerate the OFF spellings; never test a first character.** Two bugs on consecutive days on the
+   same switch: `getenv(...) == nullptr` treated `=0` as ON, then a leading-char check treated `=off`
+   as ON because `off` starts with `o`. Lowercase and `strcmp` the whole word: `0`, `no`, `off`,
+   `false`, `disable`, `disabled`, empty.
+
+Test this logic in a host suite that needs no GL -- a dozen `setenv`/`touch` cases driven against a copy
+of the decision function. The failure mode is invisible at runtime, so a test is the only thing that
+finds it.
+
+**The same reasoning applies to buffers sized for a desktop.** Anything you allocate per worker is
+allocated inside the port's own heap budget (section 2), where a failure is a hard abort, and an
+emulator will not reproduce it. Make the size a build-time override (`#ifndef`/`#define` around a
+constant) so the first console run can use a smaller one, and report the footprint's lifetime peak
+rather than its current value -- after warm-up nothing grows, so a per-window figure reads 0 in exactly
+the steady scene you care about.
+
 **Do not pin the main thread and expect a win by itself.** Concentrating everything on core 0 can make
 things worse on a Cortex-A9 shared with a GPU driver thread. The layout is a hypothesis that hardware
 settles; ship it OFF, ship the census ON (it is free), and only then decide.
