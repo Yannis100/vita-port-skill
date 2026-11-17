@@ -41,7 +41,7 @@ single A/B pair cannot separate a real 20 ms gain from the emulator's variance. 
 state transitions, log order), and take anything time-based to hardware with
 `references/agent-loop.md` section 2.
 
-## 2. Instrument design: six failures worth not repeating
+## 2. Instrument design: nine failures worth not repeating
 
 ### 2.1 Gated on a frame number the run never reaches
 A one-shot survey gated on `frame == 2760` produced **nothing**, because the input script ended at
@@ -99,6 +99,49 @@ minute ~10.
 **Fix:** add a state probe that logs transitions, and read it. A menu is a state machine; print
 `(state, submenu)` on every change, once per distinct tuple, and the last line tells you where it
 stopped. This settled in one run what several rounds of staring at images got wrong.
+
+### 2.7 A timing A/B where only one arm contains the instrumentation
+This is the most expensive one, because the result looks like a clean signal. A verification mode
+(re-decode every result and `memcmp` it) ran automatically for the first 60 frames. It costs a second
+decode, and it only exists in the build where the feature under test is present -- so the "feature on"
+arm paid for every draw twice and the "feature off" arm did not. Three A/B rounds reported a
+**20 % regression** that was mostly the verifier. The feature was in fact 19 % slower, so the
+conclusion was right and the number was wrong, which is the worst combination: the mistake would never
+have been caught by disagreeing with the expected answer.
+
+**Fix, two rules:**
+- Correctness instrumentation must be **OFF by default and enabled deliberately** (`TPV_VERIFY_DECODE=1`),
+  never auto-running for the first N frames. Prove correctness first, with it on; then measure, with it off.
+- After any timing result, ask *what else differs between the two arms besides the feature*. If the
+  answer is not "nothing", the number is not the feature's.
+
+Corollary that makes this cheap to detect: an implausible mechanism. A 20 % loss from a phase that was
+0.2 % of the frame cannot be explained by that phase, so it was not the phase. When a result resists the
+mechanism you believe in, re-derive the mechanism before trusting the number.
+
+### 2.8 A benchmark whose workload merged into a single item
+A synthetic scene issued 400 draw calls per frame and the recorder merged them into ONE, because
+adjacent draws merge only when their uniform BYTES are identical and nothing varied between them. The
+pipelining benchmark then had exactly one item to pipeline, the consumer blocked on 100 % of its waits,
+and the run "proved" that overlapping does not work -- correctly, for a reason unrelated to the
+question. One per-draw `GXSetTevColor` fixed it and the same code showed a 0.18 % stall rate.
+
+**Fix:** count the items the feature operates on and print the count next to the result. For a
+producer/consumer pipeline, `waits: N calls, M blocked` with `M == N` means there was nothing to overlap.
+A benchmark of a mechanism that silently degenerated to one iteration is not a benchmark of that
+mechanism.
+
+### 2.9 Two runs of the same script that did not stay in the same scene
+Comparing two emulator runs by FRAME NUMBER produced a "70 % improvement" that was pure scene content:
+game time was wall-clock while the script advanced with rendered frames, so one run ended at frame 3480
+and the other at 9480, with draw counts differing by 2.6x. Pairing by draw count is better but still not
+sufficient; a frame-time-vs-draw-count fit gave **R² = 0.014**, i.e. the model described nothing.
+
+**Fix:** make the comparison fixed by construction -- replay ONE recorded frame N times in-process and
+time that (`--bench <scene> <frames>` in the host harness). If the only available data are two live
+runs, use RATIOS WITHIN a run (phase shares, per-draw costs), which cancel scene composition, and report
+the frame-time delta with its spread and a warning when the spread exceeds the median. Never quote a
+cross-run frame-time delta matched on a frame index.
 
 ## 3. Reading a screenshot numerically
 
