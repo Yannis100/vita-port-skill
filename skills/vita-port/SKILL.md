@@ -30,7 +30,7 @@ workflow below front-loads the checks that catch those early.
   which claims in your report are build-verified and which are untested on a Vita.
 - **Measure before you claim, and state the condition in full.** An aggregate of a criterion you
   have not fully written down is fiction, and a screenshot filename is an expectation, not evidence.
-  `references/measurement.md` has the nine ways this went wrong on a real port, plus what an emulator
+  `references/measurement.md` has the twelve ways this went wrong on a real port, plus what an emulator
   can and cannot resolve. Read it before optimising or before writing a performance claim.
 
 ## Workflow

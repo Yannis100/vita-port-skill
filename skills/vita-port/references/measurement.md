@@ -41,7 +41,7 @@ single A/B pair cannot separate a real 20 ms gain from the emulator's variance. 
 state transitions, log order), and take anything time-based to hardware with
 `references/agent-loop.md` section 2.
 
-## 2. Instrument design: nine failures worth not repeating
+## 2. Instrument design: twelve failures worth not repeating
 
 ### 2.1 Gated on a frame number the run never reaches
 A one-shot survey gated on `frame == 2760` produced **nothing**, because the input script ended at
@@ -131,6 +131,19 @@ producer/consumer pipeline, `waits: N calls, M blocked` with `M == N` means ther
 A benchmark of a mechanism that silently degenerated to one iteration is not a benchmark of that
 mechanism.
 
+### 2.7b An enclosing-span timer books other people's costs to the phase you named
+A phase measured as `whole - inner` is an enclosing span, not an attribution: anything the thread blocks
+on inside it lands there. Measured: `pass` (defined as `draw_pass()` minus the submit timer) read 24-29 %
+of the frame after a decode worker's hand-off was added inside that span, and the release alone accounted
+for all of it. The same phase read **2.1 %** with the worker disabled. Nothing about the GL-state work had
+changed; a cost introduced elsewhere was being reported as this phase growing.
+
+**Fix:** split the phase into its individual calls before drawing any conclusion about it, and time each
+call you are about to add *inside* an existing phase. `pass` split into five parts (program lookup/bind,
+state application, uniform upload, texture binds, fog LUT) showed 53 % / 37 % / 5 % / 2 % / 2 % of `pass`,
+and `pass` is 2 % of the frame -- which moved the lever to `submit` at 85 %, the opposite of the ranking
+the enclosing-span number had produced.
+
 ### 2.9 Two runs of the same script that did not stay in the same scene
 Comparing two emulator runs by FRAME NUMBER produced a "70 % improvement" that was pure scene content:
 game time was wall-clock while the script advanced with rendered frames, so one run ended at frame 3480
@@ -142,6 +155,36 @@ time that (`--bench <scene> <frames>` in the host harness). If the only availabl
 runs, use RATIOS WITHIN a run (phase shares, per-draw costs), which cancel scene composition, and report
 the frame-time delta with its spread and a warning when the spread exceeds the median. Never quote a
 cross-run frame-time delta matched on a frame index.
+
+### 2.10 Two ways an A/B silently stops being an A/B
+Both were found on the same port, after the timing had already looked good.
+
+**A flag whose PRESENCE enables a feature cannot be turned off by setting it to 0.**
+
+```c
+if (std::getenv("TPV_ENABLE_DECODE_WORKER") == nullptr) return false;  /* =0 still ENABLES */
+```
+
+The "control" arm ran the feature under test and reported `2 threads`, so the comparison was feature vs
+feature. Parse the value and treat `0`, `off`, `no`, `false` and the empty string as disabled. Applies to
+env vars, ini keys, and `stat()`-style marker files alike: a marker's presence is a boolean, so never
+build a boolean out of something that carries a value, and never let the absence of a value mean "on".
+
+**`condition_variable::wait_for` returns on TIMEOUT with the predicate still false.**
+
+```c
+cv.wait_for(lock, 200us, pred);   /* WRONG: after 200 us this proceeds even if pred is false */
+while (!pred()) cv.wait_for(lock, 1ms, pred);   /* RIGHT: a timeout means "check again" */
+```
+
+Used as a bare statement it silently means "wait a little, then do it anyway". Measured consequence: a
+producer overwrote a buffer the consumer was still reading. **The frame got about 3 % faster and 29 of
+23,600 decoded results differed (0.12 %)** -- the rate you expect from occasional timeouts, invisible in any
+screenshot, and invisible to a frame-time measurement because it *improves* the number. Only the byte-exact
+verifier caught it.
+
+Order of operations that follows: prove correctness FIRST with the optimisation on, then measure. If a
+change makes the frame faster and a verifier is not part of the build, the faster number is not evidence.
 
 ## 3. Reading a screenshot numerically
 

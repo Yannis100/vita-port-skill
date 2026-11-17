@@ -400,16 +400,32 @@ For heavy so-loader or engine ports, run all GL calls on a dedicated thread thro
   after every command made every recorded call miss (real hardware finding from KOTOR II).
 - Generate the wrappers with a small tool (`tools/gen_glw.py` in VitaKotor2) rather than hand-writing them.
 
-**Size the hand-off before believing in the overlap.** A producer/consumer pipeline pays only when the
-work it hides exceeds the cost of the hand-off. Measured on a decode worker handed one draw at a time,
-393 draws per frame, on a host with sixteen idle cores: the overlap was perfect -- **0.18 % of draws ever
-blocked, so ~all of the work did leave the critical path** -- and the frame was still **19 % SLOWER**,
-because decode was only 11.6 % of that frame while 393 synchronisations plus a second runnable thread
-cost more than 11.6 %.
+**Size the hand-off before believing in the overlap, then coarsen it until it pays.** A producer/consumer
+pipeline pays only when the work it hides exceeds the cost of the hand-off. Measured twice on the same
+decode worker at 393 draws per frame: handed off **one draw at a time** the frame was **19 % SLOWER** --
+and the overlap itself was perfect, 0.18 % of draws ever blocked, so ~all of the work did leave the
+critical path. Handed off in **ranges of 16** with the same code, the same frame was **~3 % FASTER**
+(four interleaved rounds, faster in every one).
 
-That is one data point, not a threshold: it does not tell you where the crossover sits, only that 11.6 %
-was below it on that host. Treat the crossover as unknown until you measure it on your own port, and do
-not cite a "phase must be at least N %" figure as if it had been established.
+The instrument that explained the gap: time the hand-off call on its own. At per-draw granularity the
+release was **24-29 % of the whole frame** over 47,200 calls, ~0.5 us each, and 88-92 % of those calls
+found the consumer parked and had to wake it. That is 47,200 wake-ups per frame to hide 11 % of it.
+
+Two rules, both measured:
+
+1. **Coarsen the unit before optimising anything else about the pipeline.** Per-item hand-off at a 0.2 %
+   stall rate buys nothing and costs a wake-up per item. Ranges of 8-32, or a whole frame, are the
+   starting point, not the refinement.
+2. **Notice that `notify_one()` is not free when nobody is waiting, but it is also not the main cost when
+   somebody is.** Gating the notify behind a "consumer is parked" counter changed the number by 0.0
+   points (23.9 % -> 23.9 %), because the consumer really was parked on almost every item. The cost was
+   the wake-up itself, and only coarsening removed it.
+
+**Bound the granularity, do not remove the bound.** With ranges the ring's effective capacity shrinks by
+the range size (a consumer lagging by one range plus the ring must still fit), so publish every Nth slot
+with `N < ring size`, and make the parked consumer's wait TIME-BOUNDED *and* looped -- a bare
+`wait_for` returns on timeout with the predicate still false and will let a producer overwrite data in
+use. See `references/measurement.md` 2.10.
 
 Three rules that follow, in order:
 1. **Coarsen the unit.** Hand off ranges of 8-32 items, or a whole frame, not one item. At a 0.18 % stall
