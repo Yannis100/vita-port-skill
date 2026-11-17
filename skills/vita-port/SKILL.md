@@ -30,7 +30,7 @@ workflow below front-loads the checks that catch those early.
   which claims in your report are build-verified and which are untested on a Vita.
 - **Measure before you claim, and state the condition in full.** An aggregate of a criterion you
   have not fully written down is fiction, and a screenshot filename is an expectation, not evidence.
-  `references/measurement.md` has the six ways this went wrong on a real port, plus what an emulator
+  `references/measurement.md` has the nine ways this went wrong on a real port, plus what an emulator
   can and cannot resolve. Read it before optimising or before writing a performance claim.
 
 ## Workflow
@@ -135,9 +135,18 @@ standard, so pass `-std=gnu11` for older C code.
 ### 5. Platform layer
 
 Keep Vita code behind `#ifdef __vita__` (or a `vita/` directory) so upstream merges stay easy. Copy
-`assets/vita_runtime.c` into the project: it sets the newlib heap, main-thread stack, CPU affinity
-and clocks, which are the settings ports most often forget. Choose the numbers with
-`references/runtime.md` (memory budget, threads, files, input, audio).
+`assets/vita_runtime.c` into the project: it sets the newlib heap, the main-thread stack and the clocks,
+and it ships `vita_pin_thread_to_core()` for threads you do want pinned. Those are the settings ports
+most often forget.
+
+Then decide thread placement deliberately rather than inheriting it. That asset pins nothing by itself,
+and neither does most ported code: a port that never calls `sceKernelChangeThreadCpuAffinityMask` still
+reaches all three user cores (mask `_ALL` = `0x70000`), but by accident of the scheduler, and it cannot
+answer "which core is the render thread on". A Vita is a quad-core Cortex-A9 and a game may use **three**
+cores. Copy `assets/cpu_placement.{hpp,cpp}` for the deliberate version: a thread census (free, leave it
+on), runtime-toggled pinning (no plugin), and a 4th-core probe that TESTS for CapUnlocker by asking and
+reading the mask back instead of assuming. `references/runtime.md` section 5c has the measured return
+codes; the same file has the other numbers (memory budget, threads, files, input, audio).
 
 **Memory budget.** The newlib heap, `sceLibcHeapSize`, thread stacks, vitaGL's RAM pool, and any
 `sceKernelAllocMemBlock` arenas all count against the MAIN budget (256 MiB default, up to 365 MiB
@@ -228,6 +237,8 @@ LGPL-3.0. Use a unique 9-character title ID of the form `XXXXYYYYY`.
 | `references/debugging.md` | install errors, boot crashes, black screens, link errors, crash dumps, tools |
 | `references/agent-loop.md` | automating the build→deploy→see→measure→fix loop on a real console (vita-agent-use, psp2-tooling, vitacompanion fallback) |
 | `references/measurement.md` | before optimising or claiming a gain: what an emulator can resolve, how to instrument, how to read a screenshot numerically, how to report what you measured |
+| `assets/cpu_placement.{hpp,cpp}` | you want a thread census, CPU pinning, or to know whether the 4th core (CapUnlocker) is available; see `references/runtime.md` section 5c |
+| `scripts/vita_hot_order.py` | code is slow and you want a build-level win with no source change: turns a CPU profile into a linker fragment that puts the hottest functions at the start of `.text` (see `references/toolchain.md` section 3c) |
 
 ## Final report checklist
 
@@ -235,3 +246,7 @@ When you finish, state: which port route you chose and why; what was built (and 
 version) versus only written; what was never run on a console; the memory settings you chose and
 their basis; and what the end user must supply (assets, `libshacccg.suprx`, plugins with the
 minimum version and supported firmware, e.g. kubridge v0.3.1_hotfix on 3.60/3.65 for `MemProtect`).
+
+If you touched threads, also state which core each thread is meant to run on, whether that is
+merely intended or actually applied, and whether the placement was measured. "It uses all the cores"
+is not an answer; the census line and the chosen mask are.

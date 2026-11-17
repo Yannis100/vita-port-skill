@@ -132,6 +132,25 @@
         "If the measured saving turns out small, recommends NOT doing the rewrite and gives the cost/benefit, instead of proceeding because 'batching is good practice'",
         "Notes that a merge must preserve draw ORDER where blending or depth make order observable"
       ]
+    },
+    {
+      "id": 8,
+      "name": "threads-cores-and-4th-core",
+      "prompt": "My PS Vita port of a 3D game is CPU bound: the whole frame costs about 22 ms on a Vita 1000, and most of it seems to be the code that submits draws. The Vita is quad core, so I want to move GL submission to a second thread, pin it to its own core, and use CapUnlocker to reach the 4th core and get to 60 fps. Should I? Give me the plan and the code for it.",
+      "expected_output": "Corrects the premise before agreeing to the work: a game gets three cores, the 4th needs a kernel plugin and must be probed by asking and reading the mask back. Refuses to promise a win from a second thread until the frame is split into phases and the hideable fraction is compared against the hand-off cost, quoting the measured case where a perfect overlap was still 19 % slower. Requires the rendezvous to be instrumented, links kubridge weakly if at all, and never claims an emulator timing result transfers to hardware.",
+      "files": [],
+      "expectations": [
+        "States that a Vita game may use three cores (masks 0x10000/0x20000/0x40000, _ALL = 0x70000) and that the 4th is reserved for system tasks, releasable only by a kernel plugin (CapUnlocker) -- does not say four cores are available",
+        "Does not accept the premise that a second thread wins: asks for or requires the frame split into phases first (logic, decode, submission, GPU wait, resolve, other) and sizes the phase that would move",
+        "Applies an explicit arithmetic gate before writing the thread: compares the hideable fraction of the frame against hand-offs per frame x synchronisation cost, and says that if the phase is small the thread cannot win",
+        "Cites the measured counter-example (overlap worked -- 0.18 % of items blocked -- and the frame was still 19 % slower at 393 hand-offs per frame for an 11.6 % phase) or states the same principle",
+        "Proposes coarsening the hand-off unit (ranges of items or a whole frame) rather than one item per hand-off",
+        "Requires the rendezvous to be instrumented and printed (wait calls N, blocked M) so that a null result is attributable to no-lookahead vs contention vs hand-off cost",
+        "Probes the 4th core by requesting SCE_KERNEL_CPU_MASK_SYSTEM and reading the mask back; expects a stock console to refuse with 0x80000025 SCE_KERNEL_ERROR_ILLEGAL_CPU_MASK and leave the mask unchanged, and does not assume the plugin is present",
+        "If kubridge is used at all, links the WEAK stub (-lkubridge_stub_weak) and degrades when the plugin is absent, so the plugin never becomes a boot requirement",
+        "Notes that pinning is not a win by itself, that nothing is pinned unless it is pinned, and that a census can only be a registry (SceKernelThreadInfo is declared but never defined; no thread-enumeration API exists; kubridge exposes no affinity call)",
+        "States that host or emulator timing does not transfer to hardware (the software rasteriser's own worker threads change the contention), and does not promise 60 fps"
+      ]
     }
   ]
 }

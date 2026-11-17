@@ -9,7 +9,7 @@ numbers are tagged *(wiki, unverified)*. Anything tagged *(unverified)* needs a 
 2. Memory budget and the memory flags
 3. The settings every port should export
 4. Memory blocks and GPU memory (4b: JIT memory, 4c: kubridge)
-5. Threads and CPU cores (5a: priority/core affinity mapping)
+5. Threads and CPU cores (5a: priority/affinity mapping, 5b: layouts, 5c: census + 4th core, measured)
 6. Clocks and frame pacing
 7. Files and paths, savedata
 8. Input mapping
@@ -301,6 +301,97 @@ uses a lock-free ring buffer of wrapped calls with semaphores for sync calls tha
 (pointer args refer to producer memory during a sync call). Producer keeps a state copy so the
 worker replays with correct buffer binds/attribute pointers.
 
+### 5c. Census, affinity and the 4th core: the measured mechanics (2026-11-17)
+
+Read this before writing any placement code. Every claim below was checked on a real build, and the
+numbers are what the kernel actually returned rather than what the documentation implies.
+
+**Nothing is pinned unless you pin it, and that includes threads you never thought about.** Measured on
+a port that had no affinity call anywhere: the main thread's mask was `0x70000` -- all three user cores.
+That is fine, but it means the scheduler decides where the render thread runs, and you cannot answer
+"which core is the GL thread on" when that is the question that matters. A census is the cheap first
+step; `assets/cpu_placement.{hpp,cpp}` in this skill is a drop-in implementation.
+
+**You cannot enumerate threads you did not create.** Checked in VitaSDK 2026.08: `SceKernelThreadInfo`
+is DECLARED in `psp2/kernel/threadmgr/thread.h` (`sceKernelGetThreadInfo` takes a pointer to it) and
+never DEFINED anywhere in the headers, and there is no thread-enumeration function. kubridge does not
+help either -- its exports are `kuKernelAllocMemBlock`, `kuKernelFlushCaches`,
+`kuKernelCpuUnrestrictedMemcpy`, `kuKernelMemProtect`, `MemReserve/Commit/Decommit`, the two exception
+handlers, and `kuPowerGet/SetSysClockFrequency`; there is no affinity or thread-list call. So a census
+must be a registry: threads register themselves. Have the report say so, or it reads as a
+blank-and-authoritative list that silently omits SDL's, vitaGL's and any library's threads.
+
+**The APIs that do exist and are enough:**
+
+```c
+int sceKernelGetThreadCpuAffinityMask(SceUID thid);            /* >= 0: current mask */
+int sceKernelChangeThreadCpuAffinityMask(SceUID thid, int mask); /* 0: accepted */
+int sceKernelGetThreadId(void);
+int sceKernelGetCpuId(void);                                    /* <psp2/kernel/cpu.h> */
+```
+Masks are `SCE_KERNEL_CPU_MASK_USER_0/1/2 = 0x10000/0x20000/0x40000`, `_ALL = 0x70000`,
+`_SYSTEM = 0x80000`. Stubs: `libSceKernelThreadMgr_stub.a` (affinity, thread id) and
+`libSceSysmem_stub.a` (`sceKernelGetCpuId`) -- verify both are in the link line.
+
+**The 4th core (CapUnlocker) is detected by trying, never by assuming.** There is no userland API that
+reports whether the system core has been released. The test that works is to ask for a mask that
+includes it and read the mask back:
+
+```c
+const int before = sceKernelGetThreadCpuAffinityMask(thid);
+const int rc = sceKernelChangeThreadCpuAffinityMask(thid, SCE_KERNEL_CPU_MASK_USER_0 | SCE_KERNEL_CPU_MASK_SYSTEM);
+const int after = sceKernelGetThreadCpuAffinityMask(thid);
+const bool have4 = rc >= 0 && (after & SCE_KERNEL_CPU_MASK_SYSTEM) != 0;
+sceKernelChangeThreadCpuAffinityMask(thid, before); /* leave no trace */
+```
+
+Measured on a plugin-less console: **`rc = -2147319771` (`0x80000025`,
+`SCE_KERNEL_ERROR_ILLEGAL_CPU_MASK`), `after = 0x70000`** -- unchanged. That pair of numbers is what
+"CapUnlocker absent" looks like, and it is worth logging verbatim: a port that reports "4 cores
+available" without a read-back is guessing. **(Untested here: a console with CapUnlocker active. No
+emulator can load a kernel plugin, so that arm of the test needs hardware.)** CapUnlocker
+(`GrapheneCt/CapUnlocker`) is a taiHEN kernel plugin with no userland API of any kind -- the mask probe
+is the entire userland surface.
+
+**kubridge's clock call, and the weak stub that must not become a boot requirement.** v0.3.1_hotfix
+(`bythos14/kubridge`) exports `kuPowerGet/SetSysClockFrequency`, which is how ports reach clocks above
+the `scePowerSet*` limits. Two rules:
+
+- Link `-lkubridge_stub_weak`, never the strong stub. The strong stub makes the plugin a STARTUP
+  REQUIREMENT: without `kubridge.skprx` the import is unresolved and the process dies before `main`,
+  so every user who does not have the plugin loses a port that used to boot.
+- Detect it by calling `kuPowerGetSysClockFrequency()` and treating `<= 0` as absent -- with the weak
+  stub that is what a missing plugin returns. Print "kubridge UNAVAILABLE" rather than a made-up
+  frequency. Measured: `kuPowerGetSysClockFrequency()` returned a negative value with no plugin, and
+  the port booted normally.
+- Place the kubridge stub AFTER `taihen_stub` on the link line; static stub archives are order
+  sensitive.
+
+**What the shipped module needs on the link line** (verified by compiling `assets/cpu_placement.cpp`
+with `arm-vita-eabi-g++` both with and without `-DTPV_HAVE_KUBRIDGE`):
+
+| symbols it references | stub archive |
+|---|---|
+| `sceKernelGet/ChangeThreadCpuAffinityMask`, `sceKernelGetThreadId` | `SceKernelThreadMgr_stub` |
+| `scePowerGetArmClockFrequency` | `ScePower_stub` |
+| `kuPowerGet/SetSysClockFrequency` (only with `-DTPV_HAVE_KUBRIDGE`) | `kubridge_stub_weak` |
+
+Anything a port leaves unresolved here is a link error, not a silent no-op, which is the right way
+round -- but a link order that puts `kubridge_stub_weak` before `taihen_stub` will fail, so put it last.
+
+**Toggle the layout at runtime, not at compile time.** A file is better than an env var on a console
+(there is no shell):
+```c
+bool placement_requested() { struct stat st{}; return ::stat("ux0:data/<app>/pin_threads", &st) == 0; }
+```
+That one file is what lets a single console session produce a pinned run and an unpinned run of the
+same build, which is the only way to measure whether a layout helps. KOTOR II ships the same idea as
+`THREAD_PINNING`; see 5b.
+
+**Do not pin the main thread and expect a win by itself.** Concentrating everything on core 0 can make
+things worse on a Cortex-A9 shared with a GPU driver thread. The layout is a hypothesis that hardware
+settles; ship it OFF, ship the census ON (it is free), and only then decide.
+
 ### GL worker thread (VitaKotor2, gl_worker.c)
 
 For heavy so-loader or engine ports, run all GL calls on a dedicated thread through a lock-free ring buffer:
@@ -308,6 +399,31 @@ For heavy so-loader or engine ports, run all GL calls on a dedicated thread thro
 - 64-byte cache-line alignment for the shared state is mandatory: a shared cache line rewritten by the worker
   after every command made every recorded call miss (real hardware finding from KOTOR II).
 - Generate the wrappers with a small tool (`tools/gen_glw.py` in VitaKotor2) rather than hand-writing them.
+
+**Size the hand-off before believing in the overlap.** A producer/consumer pipeline pays only when the
+work it hides exceeds the cost of the hand-off. Measured on a decode worker handed one draw at a time,
+393 draws per frame, on a host with sixteen idle cores: the overlap was perfect -- **0.18 % of draws ever
+blocked, so ~all of the work did leave the critical path** -- and the frame was still **19 % SLOWER**,
+because decode was only 11.6 % of that frame while 393 synchronisations plus a second runnable thread
+cost more than 11.6 %.
+
+That is one data point, not a threshold: it does not tell you where the crossover sits, only that 11.6 %
+was below it on that host. Treat the crossover as unknown until you measure it on your own port, and do
+not cite a "phase must be at least N %" figure as if it had been established.
+
+Three rules that follow, in order:
+1. **Coarsen the unit.** Hand off ranges of 8-32 items, or a whole frame, not one item. At a 0.18 % stall
+   rate the per-item granularity buys nothing and the notifications are pure overhead. Start coarse.
+2. **Compare phase size against hand-off cost before writing the thread.** If (phase % of frame) <
+   (hand-offs per frame x sync cost), it cannot win; estimate first, it is arithmetic.
+3. **Instrument the rendezvous, not just the work.** Print `waits: N calls, M blocked`. `M == N` means
+   there was no lookahead (nothing was pipelined); `M/N` near zero means the overlap worked and any
+   remaining loss is contention or hand-off overhead. Those two numbers decide the diagnosis, and
+   without them "the thread did not help" is unattributable.
+
+One more: a second thread competes with everything already running. On a host/emulator that includes the
+software rasteriser's worker threads, so a loss there does NOT transfer to a console with one GPU driver
+thread and two spare cores. Measure the direction on hardware before deciding sign.
 
 ## 6. Clocks and frame pacing
 

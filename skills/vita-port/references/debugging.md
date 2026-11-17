@@ -28,6 +28,9 @@ Start from the symptom table; most Vita problems repeat. Items tagged *(unverifi
 | Rendering glitches after adding speed hacks | revert hacks one by one (`INDICES_SPEEDHACK`, `PRIMITIVES_SPEEDHACK` are common culprits) |
 | Audio crackle | mixing thread starved; pin to a core; bigger grain; stream music |
 | Slow | check clocks, `NO_DEBUG`, texture formats, draw calls, CPU conversion paths; profile per core (Halo CE reads per-core idle clocks via `sceKernelGetSystemInfo`) |
+| Slow, and you cannot say which core is which | **nothing is pinned.** A port with no `sceKernelChangeThreadCpuAffinityMask` still uses all three user cores (`0x70000`), but by accident, and cannot answer "which core is the render thread on" -- the question Halo CE answered to find its limit. Add a thread census and a runtime pin toggle: `assets/cpu_placement.{hpp,cpp}`, `references/runtime.md` section 5c |
+| A 4th-core or overclock feature reports "available" but nothing changes | it was assumed, not measured. Test the 4th core by asking for `SCE_KERNEL_CPU_MASK_SYSTEM` and **reading the mask back** (plugin-less consoles answer `0x80000025`, mask unchanged); test kubridge by calling `kuPowerGetSysClockFrequency()` and treating `<= 0` as absent (`references/runtime.md` section 5c) |
+| A port that used to boot now dies before `main`, after adding kubridge calls | the **strong** stub was linked. `-lkubridge_stub` makes the plugin a startup requirement; `-lkubridge_stub_weak` degrades at runtime instead (`references/runtime.md` sections 4c and 5c) |
 
 ## 2. Install and bubble errors
 
@@ -61,6 +64,9 @@ unsafe builds). Unsafe apps need "unsafe homebrew" enabled in HENkaku settings.
 | `vita-elf-create: Cannot allocate N bytes for SCE data at end of segment 0; segment 1 overlaps` | the linker script puts the data segment at the next 64 KiB boundary (`DATA_SEGMENT_ALIGN(0x10000, 0x10000)`) and vita-elf-create appends ~5 KiB of SCE metadata behind the text segment, so about 8 % of text sizes fail and any small code change can trigger it. Check with `arm-vita-eabi-readelf -lW <elf>` (gap = 2nd LOAD vaddr − 1st LOAD vaddr − memsz). Fix: add a `.rodata` filler of a few tens of KiB (`const unsigned char pad[32*1024] = {1};`) so the text ends well below a boundary, and fail the build early with a gap check after link |
 | `vita-elf-create: ...<name> is not an ELF file` (file size still changing) | the ELF is half written: a long build was piped into `head`/interrupted and an orphaned `ld` is still running. Wait for `ld` to exit (`pgrep ld`), then rerun the build **without** a pipe |
 | so-loader unresolved symbols or wrong struct sizes | map in `dynlib.c`/`java.c`; wrap bionic vs newlib structs; check `__stack_chk_guard` |
+| `output section '.text.<name>' must already exist` while trying to order code hot-first | `--section-ordering-file` is the wrong flag for GNU ld. It orders **output** sections and requires them to exist already; it cannot order per-function input sections. Use `-Wl,-T,<fragment>` with a `SECTIONS { .text : { *(.text.<fn>) } }` fragment instead, and see `references/toolchain.md` section 3c |
+| `syntax error in section-ordering-file script` | same cause: GNU ld's ordering file is not an ld script and is not LLD's bare-name list. Do not port a `--section-ordering-file` recipe from an LLD toolchain |
+| entry point `0x0`, or SELF/VPK will not boot, after adding a hot-order fragment | a `-T` fragment can displace the default script's entry/segment handling; keep `ENTRY(...)` or define the full output sections rather than only `.text` |
 
 ## 4. Debugging with hardware
 

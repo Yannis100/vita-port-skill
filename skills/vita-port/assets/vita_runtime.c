@@ -47,7 +47,9 @@ static void set_clocks(void)
 	scePowerSetGpuXbarClockFrequency(166);
 }
 
-/* Pin the calling thread to user core 0..2 (masks verified in a shipping port). */
+/* Pin the calling thread to user core 0..2 (masks verified in a shipping port).
+ * Nothing calls this for you: init leaves the mask at _ALL (0x70000), so the scheduler decides. Call it
+ * per thread whose core you care about, and keep the pin behind a runtime toggle so it stays measurable. */
 void vita_pin_thread_to_core(int core)
 {
 	static const int masks[3] = { 0x10000, 0x20000, 0x40000 };

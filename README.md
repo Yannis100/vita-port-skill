@@ -22,7 +22,8 @@ npx skills add yannis100/vita-port-skill
 - Feasibility triage: six port routes (native VitaSDK, vitaGL, cross-platform API emulation,
   Android .so loading, Java/TeaVM, static recompilation)
 - Toolchain and CMake setup (including VitaSDK-softfp for Android .so ports)
-- Memory budget, thread/core mapping, and platform-layer patterns
+- Memory budget, and thread placement: a cluster-aware census, CPU pinning, and how to test whether the
+  4th core (CapUnlocker) is actually available instead of assuming it
 - OpenGL → vitaGL shader conversion and shader caching
 - Input mapping (dual sticks, touch, gyro, PS TV pads)
 - LiveArea packaging and VPK validation
@@ -65,8 +66,11 @@ Use the vita-port skill. <your request>
   platform layer → graphics → package → test → hand-off)
 - `skills/vita-port/references/` — 11 reference docs: toolchain, runtime, vitagl, port-types,
   api-emulation, so-loader, static-recomp, java-teavm, debugging, agent-loop, measurement
-- `skills/vita-port/scripts/` — audit_source.py, check_env.sh, check_vpk.py, make_placeholder_assets.py
-- `skills/vita-port/assets/` — CMakeLists.vita.txt, template.xml, vita_runtime.c
+- `skills/vita-port/scripts/` — audit_source.py, check_env.sh, check_vpk.py, make_placeholder_assets.py,
+  vita_hot_order.py (turns a CPU profile into a linker fragment that moves the hottest functions to the
+  start of `.text`)
+- `skills/vita-port/assets/` — CMakeLists.vita.txt, template.xml, vita_runtime.c,
+  cpu_placement.hpp/cpp (thread census, CPU pinning, 4th-core probe)
 - `skills/vita-port/evals/` — evaluation scenarios
 - `skills/vita-app-port/SKILL.md` — app porting workflow for Android apps and non-game tools
   (triage → toolchain → skeleton → platform layer → graphics → package → test → hand-off)
