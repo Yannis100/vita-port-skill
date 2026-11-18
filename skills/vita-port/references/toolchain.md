@@ -347,6 +347,19 @@ A `vita-elf-create` error about relocations means `-Wl,-q` is missing.
   `ux0:data/<name>/assets` when `app0:/assets` is absent; code iterations then reinstall in seconds
   (STSPSVITA: ~7 MB slim vs ~335 MB full).
 - Run `scripts/check_vpk.py` on every build.
+- **The text→data gap is a `mod 64 KiB` accident, and it breaks links on ordinary edits.**
+  `vita-elf-create` must place its SCE data in the gap between `.text` and the data segment; when the gap
+  falls under 8 KiB the link fails with
+  `gap N < 8192 bytes; vita-elf-create will fail to place its SCE data` — on a change with nothing to do
+  with linking. Because the gap moves by the padding **modulo 64 KiB**, a few KiB of new code can either
+  break it or fix it. Keep a filler `.rodata` array with a build-level size (`-DTPV_TEXT_PAD_KIB=`), read
+  the gap from the ELF on every build, and adjust the pad rather than the code. Two traps that follow:
+  a failed link leaves the **previous VPK in place**, so check the VPK's mtime rather than trusting an
+  exit code or the file's existence; and do not "fix" the gap by deleting the pad, which is what created
+  the headroom in the first place.
+- **Two builds with distinct title ids** when one must be measured and one debugged (see
+  `references/measurement.md` 2.11). Both then install on one console, and a log or screenshot is
+  attributable to the build that produced it — which is not true if you overwrite the same VPK.
 
 ## 8. Reviving an old port on the current SDK
 

@@ -167,6 +167,22 @@
         "Asks for the footprint to be logged as a lifetime peak rather than a per-window value, because after warm-up nothing grows and a per-window number reads zero in exactly the steady scene that matters",
         "Does not accept the emulator result as evidence about the console, and keeps the physical conclusion (does the second thread win on this hardware) deferred to a hardware run"
       ]
+    },
+    {
+      "id": 10,
+      "name": "timing-instrument-bias",
+      "prompt": "I instrumented my Vita port with per-phase timers so I could see where the frame goes, and the numbers say draw submission is 99.7 % of the render pass, so I'm about to rewrite the submission path. A friend says the measurement itself might be the problem. Is he right? What should I do before I start rewriting?",
+      "expected_output": "Takes the friend seriously and treats the instrument as part of the measurement: steady_clock::now() is a counter read on a 444 MHz Cortex-A9, not a free x86 vDSO call, so a timer inside the span it measures inflates that span. Requires the instruments to be compiled out behind a build flag for any build whose frame times are quoted, and two installable builds with distinct title ids so the clean one is used for ms/frame and the instrumented one only for attribution. Requires the gate to be verified in the disassembly, and the report to fire on exit and in the crash path.",
+      "files": [],
+      "expectations": [
+        "States that a clock read is not free on the console: steady_clock::now() costs a counter read on a Cortex-A9, so a timer inside the span it measures is part of that span's result, and an emulator cannot predict the bias because its clock path is the host's",
+        "Requires the phase timers to be compiled OUT behind a build flag (for example TPV_NO_PHASE_TIMERS) for any build whose frame times will be quoted, rather than left on and subtracted later",
+        "Asks for TWO builds with DISTINCT title ids so both install on one console and a log or screenshot is attributable to the build that produced it",
+        "States the read rule explicitly: frame time (ms/frame) comes only from the timing-clean build, the phase split only from the instrumented build, and a number from one must never be compared with a number from the other",
+        "Requires the gate to be verified by counting call sites in the disassembly rather than in the source, and warns that a count returning zero in BOTH configurations is usually a failed probe rather than a working gate (validated against a known-positive token)",
+        "Requires the report to run on exit (shutdown path) and on a fatal path, because a report gated on a frame-count modulo prints nothing when the run ends mid-window, and states that the final window is PARTIAL",
+        "Does not accept the 99.7 % figure at face value: asks whether the timer is inside the span, and proposes re-measuring with the instrumented build before committing to a rewrite of the submission path"
+      ]
     }
   ]
 }

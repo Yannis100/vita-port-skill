@@ -19,6 +19,10 @@ Read this before you optimise, and before you write down any performance or corr
    exactly like "nothing to report".
 5. **Correct yourself in the document.** When a written claim turns out to be wrong, replace it and say
    it was wrong. A stale claim is worse than a gap, because the next person trusts it.
+6. **An instrument inside the span it measures biases the number, and on a Cortex-A9 the bias is not
+   small.** Compile the instruments out for any build whose frame times you intend to quote (see 2.11).
+7. **A markdown trap number is a permanent citation.** When two traps turn out to be one lesson, merge the
+   text and leave the number, rather than deleting it and renumbering everything that cites it.
 
 ## 1. What Vita3K can and cannot tell you
 
@@ -185,6 +189,36 @@ verifier caught it.
 
 Order of operations that follows: prove correctness FIRST with the optimisation on, then measure. If a
 change makes the frame faster and a verifier is not part of the build, the faster number is not evidence.
+
+### 2.11 The instrument is not free, and on a Cortex-A9 it is not cheap either
+
+A per-phase timer is usually treated as free because on x86 `steady_clock::now()` is a vDSO read that
+costs nothing measurable. On a Vita it is a **counter read on a 444 MHz Cortex-A9**, and if it sits inside
+the span it measures the reading is part of the result.
+
+Measured on a real port: a per-draw timer made **two clock reads per `glDraw`**, and the phase it was
+measuring was reported as **99.7 % of the pass** — a figure the whole optimisation work order was then
+built on. No emulator run can predict that bias, because the emulator's clock read is the x86 one.
+
+Two consequences, and both are release decisions, not code style:
+
+- **Gate the instruments behind a build flag** (`TPV_NO_PHASE_TIMERS` → `TPV_PHASE_TIMERS 0`), with a
+  `PhaseStamp` struct whose constructor compiles to nothing when the flag is off. Prefer that to
+  `#if` around every span: one flag, one struct, no scattered conditionals.
+- **Ship two builds with distinct title ids** so both install on one console and a log is attributable to
+  the build that produced it (instrumented `TPLG00001` vs timing-clean `TPLG30001`). Read **ms/frame from
+  the timing-clean build** for any decision, and the phase split from the instrumented build for
+  attribution only. A number from one must never be compared against a number from the other.
+
+Verify the gate by counting call sites in the **disassembly**, not in the source, and check a
+known-positive token first — an attempted count that returns `0` in *both* configurations is usually a
+probe that failed to compile, not a gate that worked. On the measured port: 32 call sites → 9, and **zero
+on any per-draw path**, for 4.6 KiB of object size.
+
+Also give the report an exit path. A report gated on `frame_index % 120 == 0` prints nothing when a run
+ends at frame 95; call it from `shutdown_gl()` and state explicitly that the final window is **partial**,
+or the short window silently under-weights itself in any average. Hand the same summary to the crash
+recorder, because a logger that cannot flush from a fatal path will lose it.
 
 ## 3. Reading a screenshot numerically
 
